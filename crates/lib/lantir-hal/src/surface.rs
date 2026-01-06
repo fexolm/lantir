@@ -1,17 +1,17 @@
-﻿use crate::vulkan::instance::VulkanInstance;
+﻿use crate::instance::Instance;
 use ash::khr::surface;
 use ash::vk;
 use std::ops::Deref;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
-pub struct VulkanSurface {
+pub struct Surface {
     surface: vk::SurfaceKHR,
     loader: surface::Instance,
 }
 
-impl VulkanSurface {
-    pub unsafe fn new(instance: &VulkanInstance, window: &Window) -> anyhow::Result<VulkanSurface> {
+impl Surface {
+    pub unsafe fn new(instance: &Instance, window: &Window) -> anyhow::Result<Surface> {
         let surface = ash_window::create_surface(
             &instance.entry,
             instance,
@@ -22,7 +22,7 @@ impl VulkanSurface {
 
         let loader = surface::Instance::new(&instance.entry, &instance);
 
-        Ok(VulkanSurface { surface, loader })
+        Ok(Surface { surface, loader })
     }
 
     pub fn get_raw(&self) -> vk::SurfaceKHR {
@@ -34,7 +34,7 @@ impl VulkanSurface {
     }
 }
 
-impl Deref for VulkanSurface {
+impl Deref for Surface {
     type Target = surface::Instance;
     fn deref(&self) -> &Self::Target {
         &self.loader

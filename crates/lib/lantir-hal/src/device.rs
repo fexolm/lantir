@@ -1,12 +1,12 @@
-﻿use crate::vulkan::command_buffer::VulkanCommandBuffer;
-use crate::vulkan::instance::VulkanInstance;
-use crate::vulkan::surface::VulkanSurface;
+﻿use crate::instance::Instance;
+use crate::command_buffer::CommandBuffer;
 use ash::khr::swapchain;
 use ash::vk;
 use std::ffi::{c_void, CStr};
 use std::ops::Deref;
+use crate::surface::Surface;
 
-pub struct VulkanDevice {
+pub struct Device {
     device: ash::Device,
     pub physical_device: vk::PhysicalDevice,
 
@@ -15,8 +15,8 @@ pub struct VulkanDevice {
     pub universal_pool: vk::CommandPool,
 }
 
-impl VulkanDevice {
-    pub unsafe fn new(instance: &VulkanInstance, surface: &VulkanSurface) -> anyhow::Result<Self> {
+impl Device {
+    pub unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
         let SelectedPhysicalDevice {
             physical_device,
             universal_family,
@@ -66,7 +66,7 @@ impl VulkanDevice {
             device.create_command_pool(&create_info, None)?
         };
 
-        Ok(VulkanDevice {
+        Ok(Device {
             device,
             physical_device,
             universal_family,
@@ -77,7 +77,7 @@ impl VulkanDevice {
 
     pub unsafe fn submit(
         &self,
-        cb: &VulkanCommandBuffer,
+        cb: &CommandBuffer,
         wait_semaphore: vk::Semaphore,
         signal_semaphore: vk::Semaphore,
         wait_stage: vk::PipelineStageFlags2,
@@ -119,7 +119,7 @@ impl VulkanDevice {
     }
 }
 
-impl Deref for VulkanDevice {
+impl Deref for Device {
     type Target = ash::Device;
 
     fn deref(&self) -> &Self::Target {
@@ -178,7 +178,7 @@ fn check_required_features(instance: &ash::Instance, device: vk::PhysicalDevice)
 
 unsafe fn find_universal_queue_family(
     instance: &ash::Instance,
-    surface: &VulkanSurface,
+    surface: &Surface,
     device: vk::PhysicalDevice,
 ) -> Option<u32> {
     unsafe {
@@ -206,7 +206,7 @@ unsafe fn find_universal_queue_family(
 
 unsafe fn select_physical_device(
     instance: &ash::Instance,
-    surface: &VulkanSurface,
+    surface: &Surface,
 ) -> anyhow::Result<SelectedPhysicalDevice> {
     let devices = instance.enumerate_physical_devices()?;
 

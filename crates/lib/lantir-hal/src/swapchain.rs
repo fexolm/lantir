@@ -1,13 +1,13 @@
-﻿use crate::vulkan::buffer::VulkanImage;
-use crate::vulkan::device::VulkanDevice;
-use crate::vulkan::instance::VulkanInstance;
-use crate::vulkan::surface::VulkanSurface;
-use crate::vulkan::VulkanFrame;
+﻿use crate::buffer::Image;
+use crate::device::Device;
+use crate::instance::Instance;
+use crate::surface::Surface;
+use crate::RenderFrame;
 use ash::khr::swapchain;
 use ash::vk;
 use std::ops::Deref;
 
-pub struct VulkanSwapchain {
+pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
     loader: swapchain::Device,
     images: Vec<vk::Image>,
@@ -15,27 +15,27 @@ pub struct VulkanSwapchain {
     render_finished_semaphores: Vec<vk::Semaphore>,
 }
 
-pub struct VulkanSwapchainImage {
+pub struct SwapchainImage {
     pub image: vk::Image,
     pub view: vk::ImageView,
     pub index: u32,
     pub render_finished_semaphore: vk::Semaphore,
 }
-impl VulkanImage for VulkanSwapchainImage {
+impl Image for SwapchainImage {
     fn get_image(&self) -> vk::Image {
         self.image
     }
 
-    fn get_image_view(&self) -> vk::ImageView {
+    fn get_image_view(&self, _frame_idx: usize) -> vk::ImageView {
         self.view
     }
 }
 
-impl VulkanSwapchain {
+impl Swapchain {
     pub unsafe fn new(
-        instance: &VulkanInstance,
-        device: &VulkanDevice,
-        surface: &VulkanSurface,
+        instance: &Instance,
+        device: &Device,
+        surface: &Surface,
     ) -> anyhow::Result<Self> {
         let loader = swapchain::Device::new(&instance, &device);
 
@@ -81,7 +81,7 @@ impl VulkanSwapchain {
             .map(|_| device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None))
             .collect::<Result<_, _>>()?;
 
-        Ok(VulkanSwapchain {
+        Ok(Swapchain {
             swapchain,
             loader,
             images,
@@ -94,10 +94,7 @@ impl VulkanSwapchain {
         self.swapchain
     }
 
-    pub unsafe fn acquire_next_image(
-        &self,
-        frame: &VulkanFrame,
-    ) -> anyhow::Result<VulkanSwapchainImage> {
+    pub unsafe fn acquire_next_image(&self, frame: &RenderFrame) -> anyhow::Result<SwapchainImage> {
         let acquire_semaphore = frame.swapchain_acquire_semaphore;
 
         let (index, _) = self.loader.acquire_next_image(
@@ -107,7 +104,7 @@ impl VulkanSwapchain {
             vk::Fence::null(),
         )?;
 
-        Ok(VulkanSwapchainImage {
+        Ok(SwapchainImage {
             image: self.images[index as usize],
             view: self.views[index as usize],
             render_finished_semaphore: self.render_finished_semaphores[index as usize],
@@ -115,11 +112,7 @@ impl VulkanSwapchain {
         })
     }
 
-    pub fn present(
-        &self,
-        device: &VulkanDevice,
-        image: &VulkanSwapchainImage,
-    ) -> anyhow::Result<()> {
+    pub fn present(&self, device: &Device, image: &SwapchainImage) -> anyhow::Result<()> {
         let swapchains = [self.get_raw()];
         let wait_semaphores = [image.render_finished_semaphore];
         let image_indices = [image.index];
@@ -136,7 +129,7 @@ impl VulkanSwapchain {
         Ok(())
     }
 
-    pub unsafe fn destroy(&self, device: &VulkanDevice) {
+    pub unsafe fn destroy(&self, device: &Device) {
         for &v in &self.views {
             device.destroy_image_view(v, None);
         }
@@ -149,7 +142,7 @@ impl VulkanSwapchain {
     }
 }
 
-impl Deref for VulkanSwapchain {
+impl Deref for Swapchain {
     type Target = swapchain::Device;
 
     fn deref(&self) -> &Self::Target {

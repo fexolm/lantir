@@ -1,5 +1,4 @@
-﻿use lantir_hal::barriers::{AccessType, AspectMask, ImageBarrier, ImageLayout};
-use lantir_hal::{RenderingEngine, RenderingEngineConfig};
+﻿use lantir_hal::{vk, AccessType, ImageBarrier, RenderEngine, RenderEngineConfig};
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -9,7 +8,7 @@ const WINDOW_WIDTH: u32 = 1300;
 const WINDOW_HEIGHT: u32 = 900;
 
 struct App {
-    engine: Arc<RenderingEngine>,
+    engine: Arc<RenderEngine>,
     window: Window,
     frame_num: f32,
 }
@@ -22,11 +21,11 @@ impl App {
             .build(&event_loop)?;
 
         let engine = {
-            let config = RenderingEngineConfig {
+            let config = RenderEngineConfig {
                 debug: true,
                 frames_in_flight: 2,
             };
-            RenderingEngine::new(&window, &config)?
+            RenderEngine::new(&window, &config)?
         };
 
         Ok(App {
@@ -60,10 +59,10 @@ impl App {
         let image_barrier = ImageBarrier {
             previous_accesses: &[AccessType::Nothing],
             next_accesses: &[AccessType::TransferWrite],
-            previous_layout: ImageLayout::Undefined,
-            next_layout: ImageLayout::General,
+            previous_layout: vk::ImageLayout::UNDEFINED,
+            next_layout: vk::ImageLayout::GENERAL,
             image: &swapchain_image,
-            aspect_mask: AspectMask::Color,
+            aspect_mask: vk::ImageAspectFlags::COLOR,
         };
 
         let flash = ((self.frame_num / 30f32).sin()).abs();
@@ -74,23 +73,23 @@ impl App {
         cb.cmd_clear_color(
             &engine,
             &swapchain_image,
-            ImageLayout::General,
+            vk::ImageLayout::GENERAL,
             [flash, flash, flash, 1f32],
-            AspectMask::Color,
+            vk::ImageAspectFlags::COLOR,
         );
 
         let image_barrier = ImageBarrier {
             previous_accesses: &[AccessType::TransferWrite],
             next_accesses: &[AccessType::Present],
-            previous_layout: ImageLayout::General,
-            next_layout: ImageLayout::PresentSrc,
+            previous_layout: vk::ImageLayout::GENERAL,
+            next_layout: vk::ImageLayout::PRESENT_SRC_KHR,
             image: &swapchain_image,
-            aspect_mask: AspectMask::Color,
+            aspect_mask: vk::ImageAspectFlags::COLOR,
         };
 
         cb.cmd_image_barrier(&engine, &image_barrier);
 
-        engine.submit_and_present(frame, swapchain_image).unwrap();
+        engine.submit_and_present(frame, &swapchain_image).unwrap();
     }
 }
 

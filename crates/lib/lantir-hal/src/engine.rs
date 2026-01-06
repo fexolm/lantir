@@ -1,63 +1,66 @@
-﻿use crate::vulkan::device::VulkanDevice;
-use crate::vulkan::frame::VulkanFrame;
-use crate::vulkan::instance::VulkanInstance;
-use crate::vulkan::surface::VulkanSurface;
-use crate::vulkan::swapchain::{VulkanSwapchain, VulkanSwapchainImage};
-use crate::RenderingEngineConfig;
+﻿use crate::device::Device;
+use crate::frame::RenderFrame;
+use crate::instance::Instance;
+use crate::surface::Surface;
+use crate::swapchain::{Swapchain, SwapchainImage};
 use ash::vk;
 use std::cell::Cell;
+use std::sync::Arc;
 use winit::window::Window;
 
-pub struct VulkanEngine {
-    pub instance: VulkanInstance,
-    pub surface: VulkanSurface,
-    pub device: VulkanDevice,
-    pub swapchain: VulkanSwapchain,
-    pub frames: Vec<VulkanFrame>,
+pub struct RenderEngine {
+    pub instance: Instance,
+    pub surface: Surface,
+    pub device: Device,
+    pub swapchain: Swapchain,
+    pub frames: Vec<RenderFrame>,
 
     current_frame: Cell<usize>,
 }
 
-impl VulkanEngine {
-    pub fn new(window: &Window, config: &RenderingEngineConfig) -> anyhow::Result<Self> {
+pub struct RenderEngineConfig {
+    pub debug: bool,
+    pub frames_in_flight: usize,
+}
+
+impl RenderEngine {
+    pub fn new(window: &Window, config: &RenderEngineConfig) -> anyhow::Result<Arc<Self>> {
         unsafe {
-            let instance = VulkanInstance::new(window, config.debug)?;
-            let surface = VulkanSurface::new(&instance, window)?;
-            let device = VulkanDevice::new(&instance, &surface)?;
-            let swapchain = VulkanSwapchain::new(&instance, &device, &surface)?;
+            let instance = Instance::new(window, config.debug)?;
+            let surface = Surface::new(&instance, window)?;
+            let device = Device::new(&instance, &surface)?;
+            let swapchain = Swapchain::new(&instance, &device, &surface)?;
 
             let frames = (0..config.frames_in_flight)
-                .map(|_| VulkanFrame::new(&device))
+                .map(|_| RenderFrame::new(&device))
                 .collect::<Result<_, _>>()?;
 
-            Ok(Self {
+            Ok(Arc::new(Self {
                 instance,
                 surface,
                 device,
                 swapchain,
                 frames,
                 current_frame: Cell::new(0),
-            })
+            }))
         }
     }
 
-    pub fn begin_frame(&self) -> anyhow::Result<&VulkanFrame> {
+    pub fn begin_frame(&self) -> anyhow::Result<&RenderFrame> {
         self.current_frame
             .set((self.current_frame.get() + 1) % self.frames.len());
 
         let frame = &self.frames[self.current_frame.get()];
 
-        unsafe {
-            frame.render_command_buffer.reset(&self.device)?;
-        }
+        frame.render_command_buffer.reset(self)?;
 
         Ok(frame)
     }
 
     pub fn submit_and_present(
         &self,
-        frame: &VulkanFrame,
-        swapchain_image: &VulkanSwapchainImage,
+        frame: &RenderFrame,
+        swapchain_image: &SwapchainImage,
     ) -> anyhow::Result<()> {
         unsafe {
             self.device.submit(
@@ -76,15 +79,12 @@ impl VulkanEngine {
         Ok(())
     }
 
-    pub fn acquire_swapchain_image(
-        &self,
-        frame: &VulkanFrame,
-    ) -> anyhow::Result<VulkanSwapchainImage> {
+    pub fn acquire_swapchain_image(&self, frame: &RenderFrame) -> anyhow::Result<SwapchainImage> {
         unsafe { self.swapchain.acquire_next_image(&frame) }
     }
 }
 
-impl Drop for VulkanEngine {
+impl Drop for RenderEngine {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();

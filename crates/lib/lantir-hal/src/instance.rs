@@ -8,14 +8,14 @@ use std::ops::Deref;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
 
-pub struct VulkanInstance {
+pub struct Instance {
     instance: ash::Instance,
     pub entry: Entry,
     debug_utils_loader: debug_utils::Instance,
     debug_callback: DebugUtilsMessengerEXT,
 }
 
-impl VulkanInstance {
+impl Instance {
     pub unsafe fn new(window: &Window, debug: bool) -> anyhow::Result<Self> {
         let entry = ash::Entry::load()?;
         let instance = {
@@ -56,7 +56,7 @@ impl VulkanInstance {
         let debug_utils_loader = debug_utils::Instance::new(&entry, &instance);
         let debug_callback = debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?;
 
-        Ok(VulkanInstance {
+        Ok(Instance {
             instance,
             entry: entry,
             debug_utils_loader,
@@ -71,7 +71,7 @@ impl VulkanInstance {
     }
 }
 
-impl Deref for VulkanInstance {
+impl Deref for Instance {
     type Target = ash::Instance;
     fn deref(&self) -> &Self::Target {
         &self.instance
