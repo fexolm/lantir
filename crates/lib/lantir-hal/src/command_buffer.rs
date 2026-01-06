@@ -49,12 +49,12 @@ impl CommandBuffer {
         Ok(())
     }
 
-    pub(crate) unsafe fn destroy(&mut self, device: &Device) {
+    pub(crate) unsafe fn destroy(&self, device: &Device) {
         device.destroy_fence(self.submit_fence, None);
     }
 
     pub fn cmd_image_barrier(&self, engine: &RenderEngine, barrier: &ImageBarrier) {
-        let (src_mask, dst_mask, barrier) = get_image_memory_barrier(&engine.device, barrier);
+        let (src_mask, dst_mask, barrier) = get_image_memory_barrier(&engine, barrier);
 
         let barriers = [barrier];
         unsafe {
@@ -85,7 +85,7 @@ impl CommandBuffer {
         unsafe {
             engine.device.cmd_clear_color_image(
                 self.command_buffer,
-                image.get_image(),
+                image.get_image(engine.get_current_frame_index()),
                 layout,
                 &clear_value,
                 &subresource_ranges,
@@ -128,9 +128,9 @@ impl CommandBuffer {
             })];
 
         let blit_info = vk::BlitImageInfo2::default()
-            .src_image(src_image.get_image())
+            .src_image(src_image.get_image(engine.get_current_frame_index()))
             .src_image_layout(copy_info.src_layout)
-            .dst_image(dst_image.get_image())
+            .dst_image(dst_image.get_image(engine.get_current_frame_index()))
             .dst_image_layout(copy_info.dst_layout)
             .filter(vk::Filter::LINEAR)
             .regions(&blit_regions);

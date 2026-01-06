@@ -1,7 +1,8 @@
 ﻿use crate::device::Device;
 use crate::frame::RenderFrame;
-use crate::image::{Texture, TextureCreateInfo};
+use crate::image::{Texture, TextureCreateInfo, TextureData};
 use crate::instance::Instance;
+use crate::resource::ResourceDrop;
 use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
 use anyhow::anyhow;
@@ -11,13 +12,14 @@ use vk_mem::{Allocator, AllocatorCreateInfo};
 use winit::window::Window;
 
 pub struct RenderEngine {
-    pub(crate) instance: Instance,
-    pub(crate) surface: Surface,
-    pub(crate) device: Device,
     pub(crate) swapchain: Swapchain,
     pub(crate) frames: Vec<RenderFrame>,
-    pub(crate) allocator: Allocator,
     current_frame: Mutex<usize>,
+
+    pub(crate) allocator: Allocator,
+    pub(crate) device: Device,
+    pub(crate) surface: Surface,
+    pub(crate) instance: Instance,
 }
 
 pub struct RenderEngineConfig {
@@ -70,7 +72,7 @@ impl RenderEngine {
 
         let frame = &self.frames[*current_frame];
 
-        frame.cleanup_resources();
+        frame.cleanup_resources(&self);
         frame.render_command_buffer.reset(self)?;
 
         Ok(frame)
@@ -102,7 +104,7 @@ impl RenderEngine {
         unsafe { self.swapchain.acquire_next_image(&frame) }
     }
 
-    pub fn schedule_resource_release(&self, resource: Arc<dyn Drop>) {
+    pub fn schedule_resource_release(&self, resource: impl ResourceDrop + 'static) {
         let frame_index = self.get_current_frame_index();
         self.frames[frame_index].enqueue_drop(resource);
     }
@@ -111,7 +113,10 @@ impl RenderEngine {
         self: &Arc<Self>,
         create_info: &TextureCreateInfo,
     ) -> anyhow::Result<Texture> {
-        Texture::new(self.clone(), create_info)
+        Ok(Texture::new(
+            self.clone(),
+            TextureData::new(&self, create_info)?,
+        ))
     }
 }
 
@@ -120,14 +125,11 @@ impl Drop for RenderEngine {
         unsafe {
             self.device.device_wait_idle().unwrap();
 
-            for frame in &mut self.frames {
-                frame.destroy(&self.device);
+            for frame in &self.frames {
+                frame.destroy(&self);
             }
 
             self.swapchain.destroy(&self.device);
-            self.device.destroy();
-            self.surface.destroy();
-            self.instance.destroy();
         }
     }
 }

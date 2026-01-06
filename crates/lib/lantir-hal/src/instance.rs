@@ -63,18 +63,22 @@ impl Instance {
             debug_callback,
         })
     }
-
-    pub unsafe fn destroy(&mut self) {
-        self.debug_utils_loader
-            .destroy_debug_utils_messenger(self.debug_callback, None);
-        self.instance.destroy_instance(None);
-    }
 }
 
 impl Deref for Instance {
     type Target = ash::Instance;
     fn deref(&self) -> &Self::Target {
         &self.instance
+    }
+}
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        unsafe {
+            self.debug_utils_loader
+                .destroy_debug_utils_messenger(self.debug_callback, None);
+            self.instance.destroy_instance(None);
+        }
     }
 }
 

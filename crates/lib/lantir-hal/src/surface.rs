@@ -28,9 +28,13 @@ impl Surface {
     pub fn get_raw(&self) -> vk::SurfaceKHR {
         self.surface
     }
+}
 
-    pub unsafe fn destroy(&mut self) {
-        self.loader.destroy_surface(self.surface, None);
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            self.loader.destroy_surface(self.surface, None);
+        }
     }
 }
 

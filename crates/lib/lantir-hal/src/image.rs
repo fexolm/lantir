@@ -1,11 +1,11 @@
-﻿use crate::RenderEngine;
+﻿use crate::resource::{Resource, ResourceDrop};
+use crate::RenderEngine;
 use ash::vk;
-use std::sync::Arc;
 use vk_mem::{Alloc, Allocation, AllocationCreateInfo, MemoryUsage};
 
 pub trait Image {
-    fn get_image(&self) -> vk::Image;
-    fn get_image_view(&self) -> vk::ImageView;
+    fn get_image(&self, frame: usize) -> vk::Image;
+    fn get_image_view(&self, frame: usize) -> vk::ImageView;
 }
 
 pub enum UpdateFrequency {
@@ -21,60 +21,31 @@ pub struct TextureCreateInfo {
     pub usage: vk::ImageUsageFlags,
 }
 
-#[derive(Clone)]
-pub struct Texture {
-    imp: Arc<TextureImpl>,
-}
-
-impl Texture {
-    pub fn new(
-        engine: Arc<RenderEngine>,
-        create_info: &TextureCreateInfo,
-    ) -> anyhow::Result<Texture> {
-        let imp = TextureImpl::new(engine, create_info)?;
-        Ok(Texture { imp: Arc::new(imp) })
-    }
-}
+pub type Texture = Resource<TextureData>;
 
 impl Image for Texture {
-    fn get_image(&self) -> vk::Image {
-        if self.imp.images.len() > 1 {
-            self.imp.images[self.imp.engine.get_current_frame_index()]
-        } else {
-            self.imp.images[0]
-        }
+    fn get_image(&self, frame: usize) -> vk::Image {
+        self.get_handle().get_image(frame)
     }
 
-    fn get_image_view(&self) -> vk::ImageView {
-        if self.imp.image_views.len() > 1 {
-            self.imp.image_views[self.imp.engine.get_current_frame_index()]
-        } else {
-            self.imp.image_views[0]
-        }
+    fn get_image_view(&self, frame: usize) -> vk::ImageView {
+        self.get_handle().get_image_view(frame)
     }
 }
 
-impl Drop for Texture {
-    fn drop(&mut self) {
-        self.imp.engine.schedule_resource_release(self.imp.clone());
-    }
-}
-
-struct TextureImpl {
+pub struct TextureData {
     images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
 
     // TODO: use single allocation for all images
     allocations: Vec<Allocation>,
-
-    engine: Arc<RenderEngine>,
 }
 
-impl TextureImpl {
+impl TextureData {
     pub fn new(
-        engine: Arc<RenderEngine>,
+        engine: &RenderEngine,
         create_info: &TextureCreateInfo,
-    ) -> anyhow::Result<TextureImpl> {
+    ) -> anyhow::Result<TextureData> {
         let frames_count = match create_info.update_frequency {
             UpdateFrequency::Static => 1,
             UpdateFrequency::PerFrame => engine.frames.len() as u32,
@@ -123,26 +94,43 @@ impl TextureImpl {
             }
         }
 
-        Ok(TextureImpl {
+        Ok(TextureData {
             images,
             image_views,
             allocations,
-            engine,
         })
     }
 }
 
-impl Drop for TextureImpl {
-    fn drop(&mut self) {
+impl ResourceDrop for TextureData {
+    fn destroy(&mut self, engine: &RenderEngine) {
         unsafe {
             for &image_view in &self.image_views {
-                self.engine.device.destroy_image_view(image_view, None);
+                engine.device.destroy_image_view(image_view, None);
             }
             for (i, &image) in self.images.iter().enumerate() {
-                self.engine
+                engine
                     .allocator
                     .destroy_image(image, &mut self.allocations[i]);
             }
+        }
+    }
+}
+
+impl Image for TextureData {
+    fn get_image(&self, frame: usize) -> vk::Image {
+        if self.images.len() > 1 {
+            self.images[frame]
+        } else {
+            self.images[0]
+        }
+    }
+
+    fn get_image_view(&self, frame: usize) -> vk::ImageView {
+        if self.image_views.len() > 1 {
+            self.image_views[frame]
+        } else {
+            self.image_views[0]
         }
     }
 }

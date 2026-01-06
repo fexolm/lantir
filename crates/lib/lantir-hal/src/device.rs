@@ -1,22 +1,22 @@
-﻿use crate::instance::Instance;
-use crate::command_buffer::CommandBuffer;
+﻿use crate::command_buffer::CommandBuffer;
+use crate::instance::Instance;
+use crate::surface::Surface;
 use ash::khr::swapchain;
 use ash::vk;
 use std::ffi::{c_void, CStr};
 use std::ops::Deref;
-use crate::surface::Surface;
 
-pub (crate) struct Device {
+pub(crate) struct Device {
     device: ash::Device,
-    pub (crate) physical_device: vk::PhysicalDevice,
+    pub(crate) physical_device: vk::PhysicalDevice,
 
-    pub (crate)universal_family: u32,
-    pub (crate)universal_queue: vk::Queue,
-    pub (crate)universal_pool: vk::CommandPool,
+    pub(crate) universal_family: u32,
+    pub(crate) universal_queue: vk::Queue,
+    pub(crate) universal_pool: vk::CommandPool,
 }
 
 impl Device {
-    pub (crate) unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
+    pub(crate) unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
         let SelectedPhysicalDevice {
             physical_device,
             universal_family,
@@ -75,7 +75,7 @@ impl Device {
         })
     }
 
-    pub (crate) unsafe fn submit(
+    pub(crate) unsafe fn submit(
         &self,
         cb: &CommandBuffer,
         wait_semaphore: vk::Semaphore,
@@ -112,10 +112,14 @@ impl Device {
 
         Ok(())
     }
+}
 
-    pub (crate) unsafe fn destroy(&mut self) {
-        self.device.destroy_command_pool(self.universal_pool, None);
-        self.device.destroy_device(None);
+impl Drop for Device {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_command_pool(self.universal_pool, None);
+            self.device.destroy_device(None);
+        }
     }
 }
 

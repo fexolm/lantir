@@ -1,13 +1,14 @@
 ﻿use crate::device::Device;
-use crate::CommandBuffer;
+use crate::resource::ResourceDrop;
+use crate::{CommandBuffer, RenderEngine};
 use ash::vk;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 pub struct RenderFrame {
     pub(crate) render_command_buffer: CommandBuffer,
     pub(crate) swapchain_acquire_semaphore: vk::Semaphore,
 
-    pub(crate) deletion_queue: Mutex<Vec<Arc<dyn Drop>>>,
+    pub(crate) deletion_queue: Mutex<Vec<Box<dyn ResourceDrop>>>,
 }
 
 impl RenderFrame {
@@ -24,21 +25,29 @@ impl RenderFrame {
         })
     }
 
-    pub(crate) unsafe fn destroy(&mut self, device: &Device) {
-        device.destroy_semaphore(self.swapchain_acquire_semaphore, None);
-        self.render_command_buffer.destroy(device);
+    pub(crate) unsafe fn destroy(&self, engine: &RenderEngine) {
+        self.cleanup_resources(engine);
+
+        engine
+            .device
+            .destroy_semaphore(self.swapchain_acquire_semaphore, None);
+        self.render_command_buffer.destroy(&engine.device);
     }
 
     pub fn get_render_command_buffer(&self) -> &CommandBuffer {
         &self.render_command_buffer
     }
 
-    pub (crate) fn enqueue_drop(&self, resource: Arc<dyn Drop>) {
+    pub(crate) fn enqueue_drop(&self, resource: impl ResourceDrop + 'static) {
         let mut queue = self.deletion_queue.lock().unwrap();
-        queue.push(resource);
+        queue.push(Box::new(resource));
     }
 
-    pub (crate) fn cleanup_resources(&self) {
-        self.deletion_queue.lock().unwrap().clear();
+    pub(crate) fn cleanup_resources(&self, engine: &RenderEngine) {
+        let mut queue = self.deletion_queue.lock().unwrap();
+
+        for mut resource in queue.drain(..) {
+            resource.destroy(engine);
+        }
     }
 }

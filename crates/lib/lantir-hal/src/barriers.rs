@@ -25,6 +25,7 @@
 use crate::buffer::Buffer;
 use crate::device::Device;
 use crate::image::Image;
+use crate::RenderEngine;
 
 /// Defines all potential resource usages
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
@@ -250,20 +251,21 @@ pub struct ImageBarrier<'a> {
 }
 
 pub fn get_image_memory_barrier<'a>(
-    device: &Device,
+    engine: &RenderEngine,
     barrier: &ImageBarrier<'a>,
 ) -> (
     vk::PipelineStageFlags,
     vk::PipelineStageFlags,
     vk::ImageMemoryBarrier<'a>,
 ) {
+    let device = &engine.device;
     let mut src_stages = vk::PipelineStageFlags::empty();
     let mut dst_stages = vk::PipelineStageFlags::empty();
 
     let mut image_barrier = vk::ImageMemoryBarrier {
         src_queue_family_index: device.universal_family,
         dst_queue_family_index: device.universal_family,
-        image: barrier.image.get_image(),
+        image: barrier.image.get_image(engine.get_current_frame_index()),
         subresource_range: make_subresource_range(barrier.aspect_mask),
         ..Default::default()
     };

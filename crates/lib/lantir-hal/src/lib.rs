@@ -1,11 +1,16 @@
+#![allow(unsafe_op_in_unsafe_fn)]
+
 mod barriers;
 mod buffer;
 mod command_buffer;
+mod descriptor_set;
 mod device;
 mod engine;
 mod frame;
 mod image;
 mod instance;
+mod pipeline;
+mod resource;
 mod surface;
 mod swapchain;
 
