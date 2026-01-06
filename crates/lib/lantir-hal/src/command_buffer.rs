@@ -1,7 +1,7 @@
 ﻿use crate::barriers::ImageBarrier;
 use crate::barriers::{get_image_memory_barrier, make_subresource_range};
 use crate::device::Device;
-use crate::{Image, RenderEngine};
+use crate::{ComputePipeline, DescriptorSet, Image, PipelineLayout, RenderEngine};
 use ash::vk;
 use ash::vk::Extent2D;
 
@@ -139,6 +139,33 @@ impl CommandBuffer {
             engine
                 .device
                 .cmd_blit_image2(self.command_buffer, &blit_info);
+        }
+    }
+    
+    pub fn cmd_bind_compute_pipeline(&self, engine: &RenderEngine, pipeline: &ComputePipeline) {
+        unsafe {
+            engine
+                .device
+                .cmd_bind_pipeline(self.command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
+        }
+    }
+    
+    pub fn cmd_bind_descriptor_set(&self, engine: &RenderEngine, pipeline_layout: &PipelineLayout, descriptor_set: &DescriptorSet) {
+        unsafe {
+            engine.device.cmd_bind_descriptor_sets(
+                self.command_buffer,
+                vk::PipelineBindPoint::COMPUTE, 
+                pipeline_layout.layout,
+                0,
+                &[descriptor_set.get()],
+                &[],
+            )
+        };
+    }
+    
+    pub fn cmd_dispatch(&self, engine: &RenderEngine, group_count_x: u32, group_count_y: u32, group_count_z: u32) {
+        unsafe {
+            engine.device.cmd_dispatch(self.command_buffer, group_count_x, group_count_y, group_count_z);
         }
     }
 }

@@ -11,6 +11,7 @@ mod image;
 mod instance;
 mod pipeline;
 mod resource;
+mod shader;
 mod surface;
 mod swapchain;
 
@@ -22,3 +23,6 @@ pub use engine::{RenderEngine, RenderEngineConfig};
 pub use frame::RenderFrame;
 pub use image::{Image, Texture, TextureCreateInfo, UpdateFrequency};
 pub use swapchain::SwapchainImage;
+pub use shader::Shader;
+pub use descriptor_set::{DescriptorSet, DescriptorSetLayout, DescriptorSetBinding, WriteImageInfo};
+pub use pipeline::{PipelineLayout, ComputePipeline};

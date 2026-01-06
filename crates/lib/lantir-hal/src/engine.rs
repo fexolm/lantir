@@ -1,8 +1,7 @@
 ﻿use crate::device::Device;
 use crate::frame::RenderFrame;
-use crate::image::{Texture, TextureCreateInfo};
 use crate::instance::Instance;
-use crate::resource::ResourceDrop;
+use crate::resource::DeferDrop;
 use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
 use anyhow::anyhow;
@@ -15,6 +14,7 @@ pub struct RenderEngine {
     pub(crate) swapchain: Swapchain,
     pub(crate) frames: Vec<RenderFrame>,
     current_frame: Mutex<usize>,
+    pub(crate) descriptor_pool: vk::DescriptorPool,
 
     pub(crate) allocator: Allocator,
     pub(crate) device: Device,
@@ -45,12 +45,41 @@ impl RenderEngine {
                 .map(|_| RenderFrame::new(&device))
                 .collect::<Result<_, _>>()?;
 
+            let descriptor_pool = {
+                let pool_sizes = [
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::UNIFORM_BUFFER,
+                        descriptor_count: 4096,
+                    },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::STORAGE_BUFFER,
+                        descriptor_count: 4096,
+                    },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::SAMPLED_IMAGE,
+                        descriptor_count: 4096,
+                    },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::SAMPLER,
+                        descriptor_count: 4096,
+                    },
+                ];
+
+                let create_info = vk::DescriptorPoolCreateInfo::default()
+                    .pool_sizes(&pool_sizes)
+                    .max_sets(1000)
+                    .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
+
+                device.create_descriptor_pool(&create_info, None).unwrap()
+            };
+
             Ok(Arc::new(Self {
                 instance,
                 surface,
                 device,
                 swapchain,
                 frames,
+                descriptor_pool,
                 allocator,
                 current_frame: Mutex::new(0),
             }))
@@ -104,16 +133,9 @@ impl RenderEngine {
         unsafe { self.swapchain.acquire_next_image(&frame) }
     }
 
-    pub fn schedule_resource_release(&self, resource: impl ResourceDrop + 'static) {
+    pub(crate) fn schedule_resource_release(&self, resource: impl DeferDrop + 'static) {
         let frame_index = self.get_current_frame_index();
         self.frames[frame_index].enqueue_drop(resource);
-    }
-
-    pub fn create_texture(
-        self: &Arc<Self>,
-        create_info: &TextureCreateInfo,
-    ) -> anyhow::Result<Texture> {
-        Ok(Texture::new(self.clone(), create_info)?)
     }
 }
 
@@ -121,6 +143,9 @@ impl Drop for RenderEngine {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
+
+            self.device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
 
             for frame in &self.frames {
                 frame.destroy(&self);

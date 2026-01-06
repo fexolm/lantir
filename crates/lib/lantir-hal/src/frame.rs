@@ -1,5 +1,5 @@
 ﻿use crate::device::Device;
-use crate::resource::ResourceDrop;
+use crate::resource::DeferDrop;
 use crate::{CommandBuffer, RenderEngine};
 use ash::vk;
 use std::sync::Mutex;
@@ -8,7 +8,7 @@ pub struct RenderFrame {
     pub(crate) render_command_buffer: CommandBuffer,
     pub(crate) swapchain_acquire_semaphore: vk::Semaphore,
 
-    pub(crate) deletion_queue: Mutex<Vec<Box<dyn ResourceDrop>>>,
+    pub(crate) deletion_queue: Mutex<Vec<Box<dyn DeferDrop>>>,
 }
 
 impl RenderFrame {
@@ -38,7 +38,7 @@ impl RenderFrame {
         &self.render_command_buffer
     }
 
-    pub(crate) fn enqueue_drop(&self, resource: impl ResourceDrop + 'static) {
+    pub(crate) fn enqueue_drop(&self, resource: impl DeferDrop + 'static) {
         let mut queue = self.deletion_queue.lock().unwrap();
         queue.push(Box::new(resource));
     }

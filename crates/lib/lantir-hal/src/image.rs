@@ -1,4 +1,4 @@
-﻿use crate::resource::{Resource, ResourceDrop};
+﻿use crate::resource::{DeferDrop, Resource};
 use crate::RenderEngine;
 use ash::vk;
 use std::sync::Arc;
@@ -131,7 +131,7 @@ impl TextureData {
     }
 }
 
-impl ResourceDrop for TextureData {
+impl DeferDrop for TextureData {
     fn destroy(&mut self, engine: &RenderEngine) {
         unsafe {
             for &image_view in &self.image_views {

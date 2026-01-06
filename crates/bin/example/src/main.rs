@@ -1,6 +1,7 @@
 ﻿use lantir_hal::{
-    vk, AccessType, CopyImageInfo, ImageBarrier, RenderEngine, RenderEngineConfig,
-    Texture, TextureCreateInfo, UpdateFrequency,
+    vk, AccessType, ComputePipeline, CopyImageInfo, DescriptorSet,
+    DescriptorSetBinding, DescriptorSetLayout, ImageBarrier, PipelineLayout, RenderEngine, RenderEngineConfig,
+    Shader, Texture, TextureCreateInfo, UpdateFrequency, WriteImageInfo,
 };
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
@@ -15,6 +16,9 @@ struct App {
     window: Window,
     frame_num: f32,
     texture: Texture,
+    pipeline: ComputePipeline,
+    pipeline_layout: Arc<PipelineLayout>,
+    descriptor_set: DescriptorSet,
 }
 
 impl App {
@@ -40,18 +44,40 @@ impl App {
                 width: 800,
                 height: 600,
             },
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::TRANSFER_DST,
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC
         };
 
-        let texture = engine.create_texture(&image_create_info)?;
+        let texture = Texture::new(engine.clone(), &image_create_info)?;
+
+        let shader_code = include_bytes!("gradient.spv");
+
+        let shader = Shader::new(engine.clone(), shader_code)?;
+
+        let draw_image_descriptor_layout = DescriptorSetLayout::new(
+            engine.clone(),
+            &[DescriptorSetBinding {
+                stage: vk::ShaderStageFlags::COMPUTE,
+                typ: vk::DescriptorType::STORAGE_IMAGE,
+                binding: 0,
+            }],
+        )?;
+
+        let descriptor_set =
+            DescriptorSet::new(engine.clone(), draw_image_descriptor_layout.clone())?;
+
+        let pipeline_layout =
+            PipelineLayout::new(engine.clone(), vec![draw_image_descriptor_layout])?;
+
+        let pipeline = ComputePipeline::new(engine.clone(), pipeline_layout.clone(), shader)?;
 
         Ok(App {
             window,
             texture,
             engine,
             frame_num: 0f32,
+            pipeline,
+            descriptor_set,
+            pipeline_layout,
         })
     }
 
@@ -74,45 +100,43 @@ impl App {
         let frame = engine.begin_frame().unwrap();
 
         let swapchain_image = engine.acquire_swapchain_image(&frame).unwrap();
+
+        self.descriptor_set.write_image(&WriteImageInfo {
+            binding: 0,
+            image: &self.texture,
+            layout: vk::ImageLayout::GENERAL,
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+        });
+
         let cb = frame.get_render_command_buffer();
-        {
-            let image_barrier = ImageBarrier {
+
+        cb.cmd_image_barrier(
+            &engine,
+            &ImageBarrier {
                 previous_accesses: &[AccessType::Nothing],
-                next_accesses: &[AccessType::TransferWrite],
+                next_accesses: &[AccessType::ComputeShaderWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
                 next_layout: vk::ImageLayout::GENERAL,
                 image: &self.texture,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
-            };
+            },
+        );
 
-            cb.cmd_image_barrier(&engine, &image_barrier);
-        }
+        cb.cmd_bind_compute_pipeline(&engine, &self.pipeline);
+        cb.cmd_bind_descriptor_set(&engine, &self.pipeline_layout, &self.descriptor_set);
+        cb.cmd_dispatch(&engine, 800 / 16, 600 / 16, 1);
 
-        {
-            let image_barrier = ImageBarrier {
+        cb.cmd_image_barrier(
+            &engine,
+            &ImageBarrier {
                 previous_accesses: &[AccessType::Nothing],
                 next_accesses: &[AccessType::TransferWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
                 next_layout: vk::ImageLayout::GENERAL,
                 image: &swapchain_image,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
-            };
-
-            cb.cmd_image_barrier(&engine, &image_barrier);
-        }
-
-        {
-            let flash = ((self.frame_num / 30f32).sin()).abs();
-            self.frame_num += 1f32;
-
-            cb.cmd_clear_color(
-                &engine,
-                &self.texture,
-                vk::ImageLayout::GENERAL,
-                [flash, flash, flash, 1f32],
-                vk::ImageAspectFlags::COLOR,
-            );
-        }
+            },
+        );
 
         {
             let extent = vk::Extent2D {
