@@ -1,6 +1,6 @@
 ﻿use crate::device::Device;
 use crate::frame::RenderFrame;
-use crate::image::{Texture, TextureCreateInfo, TextureData};
+use crate::image::{Texture, TextureCreateInfo};
 use crate::instance::Instance;
 use crate::resource::ResourceDrop;
 use crate::surface::Surface;
@@ -113,10 +113,7 @@ impl RenderEngine {
         self: &Arc<Self>,
         create_info: &TextureCreateInfo,
     ) -> anyhow::Result<Texture> {
-        Ok(Texture::new(
-            self.clone(),
-            TextureData::new(&self, create_info)?,
-        ))
+        Ok(Texture::new(self.clone(), create_info)?)
     }
 }
 

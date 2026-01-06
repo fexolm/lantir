@@ -21,11 +21,11 @@ pub struct SwapchainImage {
     pub render_finished_semaphore: vk::Semaphore,
 }
 impl Image for SwapchainImage {
-    fn get_image(&self, _frame: usize) -> vk::Image {
+    fn get_image(&self) -> vk::Image {
         self.image
     }
 
-    fn get_image_view(&self, _frame: usize) -> vk::ImageView {
+    fn get_image_view(&self) -> vk::ImageView {
         self.view
     }
 }

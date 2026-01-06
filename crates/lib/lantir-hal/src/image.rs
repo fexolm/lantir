@@ -1,11 +1,12 @@
 ﻿use crate::resource::{Resource, ResourceDrop};
 use crate::RenderEngine;
 use ash::vk;
+use std::sync::Arc;
 use vk_mem::{Alloc, Allocation, AllocationCreateInfo, MemoryUsage};
 
 pub trait Image {
-    fn get_image(&self, frame: usize) -> vk::Image;
-    fn get_image_view(&self, frame: usize) -> vk::ImageView;
+    fn get_image(&self) -> vk::Image;
+    fn get_image_view(&self) -> vk::ImageView;
 }
 
 pub enum UpdateFrequency {
@@ -23,13 +24,25 @@ pub struct TextureCreateInfo {
 
 pub type Texture = Resource<TextureData>;
 
+impl Texture {
+    pub fn new(
+        engine: Arc<RenderEngine>,
+        create_info: &TextureCreateInfo,
+    ) -> anyhow::Result<Texture> {
+        let data = TextureData::new(&engine, create_info)?;
+        Ok(Self::make(engine, data))
+    }
+}
+
 impl Image for Texture {
-    fn get_image(&self, frame: usize) -> vk::Image {
-        self.get_handle().get_image(frame)
+    fn get_image(&self) -> vk::Image {
+        self.get_handle()
+            .get_image(self.engine.get_current_frame_index())
     }
 
-    fn get_image_view(&self, frame: usize) -> vk::ImageView {
-        self.get_handle().get_image_view(frame)
+    fn get_image_view(&self) -> vk::ImageView {
+        self.get_handle()
+            .get_image_view(self.engine.get_current_frame_index())
     }
 }
 
@@ -100,24 +113,7 @@ impl TextureData {
             allocations,
         })
     }
-}
 
-impl ResourceDrop for TextureData {
-    fn destroy(&mut self, engine: &RenderEngine) {
-        unsafe {
-            for &image_view in &self.image_views {
-                engine.device.destroy_image_view(image_view, None);
-            }
-            for (i, &image) in self.images.iter().enumerate() {
-                engine
-                    .allocator
-                    .destroy_image(image, &mut self.allocations[i]);
-            }
-        }
-    }
-}
-
-impl Image for TextureData {
     fn get_image(&self, frame: usize) -> vk::Image {
         if self.images.len() > 1 {
             self.images[frame]
@@ -131,6 +127,21 @@ impl Image for TextureData {
             self.image_views[frame]
         } else {
             self.image_views[0]
+        }
+    }
+}
+
+impl ResourceDrop for TextureData {
+    fn destroy(&mut self, engine: &RenderEngine) {
+        unsafe {
+            for &image_view in &self.image_views {
+                engine.device.destroy_image_view(image_view, None);
+            }
+            for (i, &image) in self.images.iter().enumerate() {
+                engine
+                    .allocator
+                    .destroy_image(image, &mut self.allocations[i]);
+            }
         }
     }
 }
