@@ -1,10 +1,13 @@
 ﻿use crate::device::Device;
 use crate::CommandBuffer;
 use ash::vk;
+use std::sync::{Arc, Mutex};
 
 pub struct RenderFrame {
     pub(crate) render_command_buffer: CommandBuffer,
     pub(crate) swapchain_acquire_semaphore: vk::Semaphore,
+
+    pub(crate) deletion_queue: Mutex<Vec<Arc<dyn Drop>>>,
 }
 
 impl RenderFrame {
@@ -17,6 +20,7 @@ impl RenderFrame {
         Ok(RenderFrame {
             render_command_buffer,
             swapchain_acquire_semaphore,
+            deletion_queue: Mutex::new(Vec::new()),
         })
     }
 
@@ -24,8 +28,17 @@ impl RenderFrame {
         device.destroy_semaphore(self.swapchain_acquire_semaphore, None);
         self.render_command_buffer.destroy(device);
     }
-    
+
     pub fn get_render_command_buffer(&self) -> &CommandBuffer {
         &self.render_command_buffer
+    }
+
+    pub (crate) fn enqueue_drop(&self, resource: Arc<dyn Drop>) {
+        let mut queue = self.deletion_queue.lock().unwrap();
+        queue.push(resource);
+    }
+
+    pub (crate) fn cleanup_resources(&self) {
+        self.deletion_queue.lock().unwrap().clear();
     }
 }

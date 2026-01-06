@@ -143,13 +143,13 @@ impl CommandBuffer {
     }
 }
 
-pub struct CopyImageInfo {
-    pub src_image: &'static dyn Image,
+pub struct CopyImageInfo<'i> {
+    pub src_image: &'i dyn Image,
     pub src_layout: vk::ImageLayout,
     pub src_aspect_mask: vk::ImageAspectFlags,
     pub src_extent: Extent2D,
 
-    pub dst_image: &'static dyn Image,
+    pub dst_image: &'i dyn Image,
     pub dst_layout: vk::ImageLayout,
     pub dst_aspect_mask: vk::ImageAspectFlags,
     pub dst_extent: Extent2D,

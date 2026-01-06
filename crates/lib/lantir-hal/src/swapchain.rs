@@ -1,8 +1,7 @@
-﻿use crate::buffer::Image;
-use crate::device::Device;
+﻿use crate::device::Device;
 use crate::instance::Instance;
 use crate::surface::Surface;
-use crate::RenderFrame;
+use crate::{Image, RenderFrame};
 use ash::khr::swapchain;
 use ash::vk;
 use std::ops::Deref;
@@ -26,7 +25,7 @@ impl Image for SwapchainImage {
         self.image
     }
 
-    fn get_image_view(&self, _frame_idx: usize) -> vk::ImageView {
+    fn get_image_view(&self) -> vk::ImageView {
         self.view
     }
 }

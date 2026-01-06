@@ -6,17 +6,17 @@ use std::ffi::{c_void, CStr};
 use std::ops::Deref;
 use crate::surface::Surface;
 
-pub struct Device {
+pub (crate) struct Device {
     device: ash::Device,
-    pub physical_device: vk::PhysicalDevice,
+    pub (crate) physical_device: vk::PhysicalDevice,
 
-    pub universal_family: u32,
-    pub universal_queue: vk::Queue,
-    pub universal_pool: vk::CommandPool,
+    pub (crate)universal_family: u32,
+    pub (crate)universal_queue: vk::Queue,
+    pub (crate)universal_pool: vk::CommandPool,
 }
 
 impl Device {
-    pub unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
+    pub (crate) unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
         let SelectedPhysicalDevice {
             physical_device,
             universal_family,
@@ -75,7 +75,7 @@ impl Device {
         })
     }
 
-    pub unsafe fn submit(
+    pub (crate) unsafe fn submit(
         &self,
         cb: &CommandBuffer,
         wait_semaphore: vk::Semaphore,
@@ -113,7 +113,7 @@ impl Device {
         Ok(())
     }
 
-    pub unsafe fn destroy(&mut self) {
+    pub (crate) unsafe fn destroy(&mut self) {
         self.device.destroy_command_pool(self.universal_pool, None);
         self.device.destroy_device(None);
     }

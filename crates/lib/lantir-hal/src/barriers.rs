@@ -1,5 +1,4 @@
-﻿use crate::device::Device;
-use ash::vk;
+﻿use ash::vk;
 
 // MIT License
 //
@@ -23,7 +22,9 @@ use ash::vk;
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use crate::buffer::{Buffer, Image};
+use crate::buffer::Buffer;
+use crate::device::Device;
+use crate::image::Image;
 
 /// Defines all potential resource usages
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
