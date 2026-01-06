@@ -358,6 +358,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "example"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lantir-hal",
+ "winit",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -488,7 +497,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lantir"
+name = "lantir-hal"
 version = "0.1.0"
 dependencies = [
  "anyhow",

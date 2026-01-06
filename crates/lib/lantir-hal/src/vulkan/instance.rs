@@ -4,12 +4,13 @@ use ash::{vk, Entry};
 use std::borrow::Cow;
 use std::ffi;
 use std::ffi::c_char;
+use std::ops::Deref;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
 
 pub struct VulkanInstance {
-    pub instance: ash::Instance,
-    _entry: Entry,
+    instance: ash::Instance,
+    pub entry: Entry,
     debug_utils_loader: debug_utils::Instance,
     debug_callback: DebugUtilsMessengerEXT,
 }
@@ -57,7 +58,7 @@ impl VulkanInstance {
 
         Ok(VulkanInstance {
             instance,
-            _entry: entry,
+            entry: entry,
             debug_utils_loader,
             debug_callback,
         })
@@ -67,6 +68,13 @@ impl VulkanInstance {
         self.debug_utils_loader
             .destroy_debug_utils_messenger(self.debug_callback, None);
         self.instance.destroy_instance(None);
+    }
+}
+
+impl Deref for VulkanInstance {
+    type Target = ash::Instance;
+    fn deref(&self) -> &Self::Target {
+        &self.instance
     }
 }
 
@@ -91,9 +99,11 @@ unsafe extern "system" fn vulkan_debug_callback(
         ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
     };
 
-    println!(
-        "{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
-    );
+    if message_severity >= vk::DebugUtilsMessageSeverityFlagsEXT::WARNING {
+        println!(
+            "{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
+        );
+    }
 
     vk::FALSE
 }

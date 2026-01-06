@@ -1,0 +1,11 @@
+[package]
+name = "example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lantir-hal = { path = "../../lib/lantir-hal" }
+
+winit = { version = "0.29", features = ["rwh_06"] }
+anyhow = "1.0.100"
+

@@ -1,0 +1,234 @@
+﻿use crate::vulkan::command_buffer::VulkanCommandBuffer;
+use crate::vulkan::instance::VulkanInstance;
+use crate::vulkan::surface::VulkanSurface;
+use ash::khr::swapchain;
+use ash::vk;
+use std::ffi::{c_void, CStr};
+use std::ops::Deref;
+
+pub struct VulkanDevice {
+    device: ash::Device,
+    pub physical_device: vk::PhysicalDevice,
+
+    pub universal_family: u32,
+    pub universal_queue: vk::Queue,
+    pub universal_pool: vk::CommandPool,
+}
+
+impl VulkanDevice {
+    pub unsafe fn new(instance: &VulkanInstance, surface: &VulkanSurface) -> anyhow::Result<Self> {
+        let SelectedPhysicalDevice {
+            physical_device,
+            universal_family,
+        } = select_physical_device(&instance, &surface)?;
+
+        let device = {
+            let device_extension_names_raw = [swapchain::NAME.as_ptr()];
+
+            let features = vk::PhysicalDeviceFeatures {
+                shader_clip_distance: 1,
+                ..Default::default()
+            };
+
+            let features2 = vk::PhysicalDeviceFeatures2::default().features(features);
+            let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
+                .descriptor_indexing(true)
+                .buffer_device_address(true);
+            let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
+                .synchronization2(true)
+                .dynamic_rendering(true);
+
+            let mut all_features = features2
+                .push_next(&mut features12)
+                .push_next(&mut features13);
+
+            let priorities = [1.0];
+
+            let queue_infos = [vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(universal_family)
+                .queue_priorities(&priorities)];
+
+            let create_info = vk::DeviceCreateInfo::default()
+                .queue_create_infos(&queue_infos)
+                .enabled_extension_names(&device_extension_names_raw)
+                .push_next(&mut all_features);
+            instance
+                .create_device(physical_device, &create_info, None)
+                .unwrap()
+        };
+
+        let universal_queue = device.get_device_queue(universal_family, 0);
+
+        let universal_pool = {
+            let create_info = vk::CommandPoolCreateInfo::default()
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+                .queue_family_index(universal_family);
+            device.create_command_pool(&create_info, None)?
+        };
+
+        Ok(VulkanDevice {
+            device,
+            physical_device,
+            universal_family,
+            universal_queue,
+            universal_pool,
+        })
+    }
+
+    pub unsafe fn submit(
+        &self,
+        cb: &VulkanCommandBuffer,
+        wait_semaphore: vk::Semaphore,
+        signal_semaphore: vk::Semaphore,
+        wait_stage: vk::PipelineStageFlags2,
+        signal_stage: vk::PipelineStageFlags2,
+        queue: vk::Queue,
+    ) -> anyhow::Result<()> {
+        self.end_command_buffer(cb.command_buffer)?;
+
+        let wait_semaphores = [vk::SemaphoreSubmitInfo::default()
+            .semaphore(wait_semaphore)
+            .stage_mask(wait_stage)
+            .value(1)
+            .device_index(0)];
+
+        let signal_semaphores = [vk::SemaphoreSubmitInfo::default()
+            .semaphore(signal_semaphore)
+            .stage_mask(signal_stage)
+            .value(1)
+            .device_index(0)];
+
+        let command_buffer_infos = [vk::CommandBufferSubmitInfo::default()
+            .command_buffer(cb.command_buffer)
+            .device_mask(0)];
+
+        let submit_info = vk::SubmitInfo2::default()
+            .wait_semaphore_infos(&wait_semaphores)
+            .signal_semaphore_infos(&signal_semaphores)
+            .command_buffer_infos(&command_buffer_infos);
+
+        self.device
+            .queue_submit2(queue, &[submit_info], cb.submit_fence)?;
+
+        Ok(())
+    }
+
+    pub unsafe fn destroy(&mut self) {
+        self.device.destroy_command_pool(self.universal_pool, None);
+        self.device.destroy_device(None);
+    }
+}
+
+impl Deref for VulkanDevice {
+    type Target = ash::Device;
+
+    fn deref(&self) -> &Self::Target {
+        &self.device
+    }
+}
+
+struct SelectedPhysicalDevice {
+    physical_device: vk::PhysicalDevice,
+    universal_family: u32,
+}
+
+fn get_required_device_extensions() -> [&'static CStr; 1] {
+    [swapchain::NAME]
+}
+
+fn check_required_extensions(instance: &ash::Instance, device: vk::PhysicalDevice) -> bool {
+    let required_extentions = get_required_device_extensions();
+
+    let extension_props = unsafe {
+        instance
+            .enumerate_device_extension_properties(device)
+            .unwrap()
+    };
+
+    for required in required_extentions.iter() {
+        let found = extension_props.iter().any(|ext| {
+            let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
+            required == &name
+        });
+
+        if !found {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn check_required_features(instance: &ash::Instance, device: vk::PhysicalDevice) -> bool {
+    let features = unsafe { instance.get_physical_device_features(device) };
+    let mut features2 = vk::PhysicalDeviceFeatures2::default();
+    let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
+    let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+    features2.p_next = &mut features12 as *mut _ as *mut c_void;
+    features12.p_next = &mut features13 as *mut _ as *mut c_void;
+
+    unsafe { instance.get_physical_device_features2(device, &mut features2) };
+
+    features.sampler_anisotropy == vk::TRUE
+        && features12.buffer_device_address == vk::TRUE
+        && features12.descriptor_indexing == vk::TRUE
+        && features13.dynamic_rendering == vk::TRUE
+        && features13.synchronization2 == vk::TRUE
+}
+
+unsafe fn find_universal_queue_family(
+    instance: &ash::Instance,
+    surface: &VulkanSurface,
+    device: vk::PhysicalDevice,
+) -> Option<u32> {
+    unsafe {
+        let props = instance.get_physical_device_queue_family_properties(device);
+
+        for (idx, family) in props.iter().enumerate() {
+            let idx = idx as u32;
+
+            if !family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
+                continue;
+            }
+
+            let present_support = surface
+                .get_physical_device_surface_support(device, idx, surface.get_raw())
+                .unwrap();
+
+            if present_support {
+                return Some(idx);
+            }
+        }
+
+        None
+    }
+}
+
+unsafe fn select_physical_device(
+    instance: &ash::Instance,
+    surface: &VulkanSurface,
+) -> anyhow::Result<SelectedPhysicalDevice> {
+    let devices = instance.enumerate_physical_devices()?;
+
+    Ok(devices
+        .iter()
+        .find_map(|&physical_device| {
+            if !check_required_extensions(instance, physical_device)
+                || !check_required_features(instance, physical_device)
+            {
+                return None;
+            }
+
+            if let Some(universal_family) =
+                find_universal_queue_family(instance, surface, physical_device)
+            {
+                Some(SelectedPhysicalDevice {
+                    physical_device,
+                    universal_family,
+                })
+            } else {
+                None
+            }
+        })
+        .expect("Couldn't find suitable device."))
+}
