@@ -2,7 +2,7 @@
 use crate::barriers::{get_image_memory_barrier, make_subresource_range};
 use crate::device::Device;
 use crate::{
-    ComputePipeline, DescriptorSet, GraphicsPipeline, Image, PipelineLayout, RenderEngine,
+    Buffer, ComputePipeline, DescriptorSet, GraphicsPipeline, Image, PipelineLayout, RenderEngine,
 };
 use ash::vk;
 use ash::vk::Extent2D;
@@ -38,16 +38,29 @@ impl CommandBuffer {
     pub fn reset(&self, engine: &RenderEngine) -> anyhow::Result<()> {
         unsafe {
             let device = &engine.device;
-            device.wait_for_fences(&[self.submit_fence], true, u64::MAX)?;
-            device.reset_fences(&[self.submit_fence])?;
+
             device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())?;
-            device.begin_command_buffer(
-                self.command_buffer,
-                &vk::CommandBufferBeginInfo::default(),
-            )?;
         }
 
+        Ok(())
+    }
+
+    pub fn begin(&self, engine: &RenderEngine) -> anyhow::Result<()> {
+        unsafe {
+            engine.device.begin_command_buffer(
+                self.command_buffer,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn end(&self, engine: &RenderEngine) -> anyhow::Result<()> {
+        unsafe {
+            engine.device.end_command_buffer(self.command_buffer)?;
+        }
         Ok(())
     }
 
@@ -286,9 +299,55 @@ impl CommandBuffer {
         }
     }
 
+    pub fn cmd_draw_indexed(&self, engine: &RenderEngine, index_count: u32, instance_count: u32) {
+        unsafe {
+            engine.device.cmd_draw_indexed(
+                self.command_buffer,
+                index_count,
+                instance_count,
+                0,
+                0,
+                0,
+            );
+        }
+    }
+
     pub fn cmd_end_rendering(&self, engine: &RenderEngine) {
         unsafe {
             engine.device.cmd_end_rendering(self.command_buffer);
+        }
+    }
+
+    pub fn cmd_copy_buffer(
+        &self,
+        engine: &RenderEngine,
+        src_buffer: &Buffer,
+        dst_buffer: &Buffer,
+        copy_region: vk::BufferCopy,
+    ) {
+        unsafe {
+            engine.device.cmd_copy_buffer(
+                self.command_buffer,
+                src_buffer.get_buffer(),
+                dst_buffer.get_buffer(),
+                &[copy_region],
+            );
+        }
+    }
+
+    pub fn cmd_bind_index_buffer(
+        &self,
+        engine: &RenderEngine,
+        index_buffer: &Buffer,
+        index_type: vk::IndexType,
+    ) {
+        unsafe {
+            engine.device.cmd_bind_index_buffer(
+                self.command_buffer,
+                index_buffer.get_buffer(),
+                0,
+                index_type,
+            );
         }
     }
 }

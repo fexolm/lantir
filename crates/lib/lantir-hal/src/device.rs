@@ -3,8 +3,9 @@ use crate::instance::Instance;
 use crate::surface::Surface;
 use ash::khr::swapchain;
 use ash::vk;
-use std::ffi::{c_void, CStr};
+use std::ffi::{CStr, c_void};
 use std::ops::Deref;
+use std::sync::Mutex;
 
 pub(crate) struct Device {
     device: ash::Device,
@@ -84,8 +85,6 @@ impl Device {
         signal_stage: vk::PipelineStageFlags2,
         queue: vk::Queue,
     ) -> anyhow::Result<()> {
-        self.end_command_buffer(cb.command_buffer)?;
-
         let wait_semaphores = [vk::SemaphoreSubmitInfo::default()
             .semaphore(wait_semaphore)
             .stage_mask(wait_stage)

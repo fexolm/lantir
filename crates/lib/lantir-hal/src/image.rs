@@ -20,6 +20,7 @@ pub struct TextureCreateInfo {
     pub format: vk::Format,
     pub extent: vk::Extent2D,
     pub usage: vk::ImageUsageFlags,
+    pub memory_property: vk::MemoryPropertyFlags,
 }
 
 pub type Texture = Resource<TextureData>;
@@ -81,8 +82,8 @@ impl TextureData {
             .initial_layout(vk::ImageLayout::UNDEFINED);
 
         let allocation_info = AllocationCreateInfo {
-            usage: MemoryUsage::AutoPreferDevice,
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            usage: MemoryUsage::Auto,
+            required_flags: create_info.memory_property,
             ..Default::default()
         };
 

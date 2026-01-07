@@ -4,6 +4,7 @@ use crate::instance::Instance;
 use crate::resource::DeferDrop;
 use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
+use crate::{CommandBuffer, command_buffer};
 use anyhow::anyhow;
 use ash::vk;
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,8 @@ pub struct RenderEngine {
     pub(crate) device: Device,
     pub(crate) surface: Surface,
     pub(crate) instance: Instance,
+
+    immediate_command_buffer: Mutex<CommandBuffer>,
 }
 
 pub struct RenderEngineConfig {
@@ -35,11 +38,11 @@ impl RenderEngine {
             let device = Device::new(&instance, &surface)?;
             let swapchain = Swapchain::new(&instance, &device, &surface)?;
 
-            let allocator = Allocator::new(AllocatorCreateInfo::new(
-                &instance,
-                &device,
-                device.physical_device,
-            ))?;
+            let mut allocator_create_info =
+                AllocatorCreateInfo::new(&instance, &device, device.physical_device);
+            allocator_create_info.flags = vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+
+            let allocator = Allocator::new(allocator_create_info)?;
 
             let frames = (0..config.frames_in_flight)
                 .map(|_| RenderFrame::new(&device))
@@ -77,6 +80,9 @@ impl RenderEngine {
                 device.create_descriptor_pool(&create_info, None).unwrap()
             };
 
+            let immediate_command_buffer =
+                Mutex::new(CommandBuffer::new(&device, device.universal_pool)?);
+
             Ok(Arc::new(Self {
                 instance,
                 surface,
@@ -86,6 +92,7 @@ impl RenderEngine {
                 descriptor_pool,
                 allocator,
                 current_frame: Mutex::new(0),
+                immediate_command_buffer,
             }))
         }
     }
@@ -104,6 +111,16 @@ impl RenderEngine {
         *current_frame = (*current_frame + 1) % self.frames.len();
 
         let frame = &self.frames[*current_frame];
+
+        unsafe {
+            self.device.wait_for_fences(
+                &[frame.render_command_buffer.submit_fence],
+                true,
+                u64::MAX,
+            )?;
+            self.device
+                .reset_fences(&[frame.render_command_buffer.submit_fence])?;
+        }
 
         frame.cleanup_resources(&self);
         frame.render_command_buffer.reset(self)?;
@@ -141,12 +158,47 @@ impl RenderEngine {
         let frame_index = self.get_current_frame_index();
         self.frames[frame_index].enqueue_drop(resource);
     }
+
+    pub fn immediate_submit<F: FnOnce(&CommandBuffer)>(&self, f: F) -> anyhow::Result<()> {
+        unsafe {
+            let command_buffer = self.immediate_command_buffer.lock().unwrap();
+            self.device.reset_fences(&[command_buffer.submit_fence])?;
+
+            command_buffer.reset(self)?;
+            command_buffer.begin(self)?;
+
+            f(&command_buffer);
+
+            command_buffer.end(self)?;
+
+            let command_buffers = [vk::CommandBufferSubmitInfo::default()
+                .command_buffer(command_buffer.command_buffer)];
+
+            let submit_infos = [vk::SubmitInfo2::default().command_buffer_infos(&command_buffers)];
+
+            self.device.queue_submit2(
+                self.device.universal_queue,
+                &submit_infos,
+                command_buffer.submit_fence,
+            )?;
+
+            self.device
+                .wait_for_fences(&[command_buffer.submit_fence], true, u64::MAX)?;
+
+            Ok(())
+        }
+    }
 }
 
 impl Drop for RenderEngine {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
+
+            self.immediate_command_buffer
+                .lock()
+                .unwrap()
+                .destroy(&self.device);
 
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);

@@ -17,12 +17,15 @@ mod swapchain;
 
 pub use ash::vk;
 pub use barriers::{AccessType, ImageBarrier};
-pub use buffer::Buffer;
+pub use buffer::{Buffer, BufferCreateInfo};
 pub use command_buffer::{CommandBuffer, CopyImageInfo, RenderingAttachmentInfo, RenderingInfo};
+pub use descriptor_set::{
+    DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, WriteImageInfo,
+};
 pub use engine::{RenderEngine, RenderEngineConfig};
 pub use frame::RenderFrame;
 pub use image::{Image, Texture, TextureCreateInfo, UpdateFrequency};
-pub use swapchain::SwapchainImage;
+pub use pipeline::{ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout};
 pub use shader::Shader;
-pub use descriptor_set::{DescriptorSet, DescriptorSetLayout, DescriptorSetBinding, WriteImageInfo};
-pub use pipeline::{PipelineLayout, ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo};
+pub use swapchain::SwapchainImage;
+pub use vk_mem::AllocationCreateFlags;

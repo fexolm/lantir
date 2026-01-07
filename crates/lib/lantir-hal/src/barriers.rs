@@ -235,7 +235,7 @@ pub struct GlobalBarrier<'a> {
 pub struct BufferBarrier<'a> {
     pub previous_accesses: &'a [AccessType],
     pub next_accesses: &'a [AccessType],
-    pub buffer: &'a dyn Buffer,
+    pub buffer: &'a Buffer,
     pub offset: usize,
     pub size: usize,
 }
