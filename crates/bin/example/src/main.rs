@@ -3,6 +3,7 @@
     DescriptorSetBinding, DescriptorSetLayout, ImageBarrier, PipelineLayout, RenderEngine, RenderEngineConfig,
     Shader, Texture, TextureCreateInfo, UpdateFrequency, WriteImageInfo,
 };
+use shaderc::{CompilationArtifact, ShaderKind};
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -10,6 +11,23 @@ use winit::window::{Window, WindowBuilder};
 
 const WINDOW_WIDTH: u32 = 1300;
 const WINDOW_HEIGHT: u32 = 900;
+
+fn compile_shader(name: &str, source: &str, shader_kind: ShaderKind) -> anyhow::Result<CompilationArtifact> {
+    let mut compiler = shaderc::Compiler::new()?;
+    let options = shaderc::CompileOptions::new()?;
+
+    let binary_result = compiler.compile_into_spirv(
+        source,
+        shader_kind,
+        name,
+        "main",
+        Some(&options),
+    )?;
+
+    assert_eq!(Some(&0x07230203), binary_result.as_binary().first());
+
+    Ok(binary_result)
+}
 
 struct App {
     engine: Arc<RenderEngine>,
@@ -44,14 +62,16 @@ impl App {
                 width: 800,
                 height: 600,
             },
-            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC
+            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
         };
 
         let texture = Texture::new(engine.clone(), &image_create_info)?;
 
-        let shader_code = include_bytes!("gradient.spv");
+        let shader_code = include_str!("shaders/gradient.comp");
 
-        let shader = Shader::new(engine.clone(), shader_code)?;
+        println!("{shader_code}");
+
+        let shader = Shader::new(engine.clone(), compile_shader("gradient", shader_code, ShaderKind::Compute)?.as_binary_u8())?;
 
         let draw_image_descriptor_layout = DescriptorSetLayout::new(
             engine.clone(),

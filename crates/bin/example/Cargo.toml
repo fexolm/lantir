@@ -8,4 +8,4 @@ lantir-hal = { path = "../../lib/lantir-hal" }
 
 winit = { version = "0.29", features = ["rwh_06"] }
 anyhow = "1.0.100"
-
+shaderc = "0.10.1"
