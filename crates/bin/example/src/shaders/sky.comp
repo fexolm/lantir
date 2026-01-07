@@ -1,0 +1,90 @@
+#version 450
+layout (local_size_x = 16, local_size_y = 16) in;
+layout(rgba8,set = 0, binding = 0) uniform image2D image;
+
+// License Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
+
+//push constants block
+layout( push_constant ) uniform constants
+{
+ vec4 data1;
+ vec4 data2;
+ vec4 data3;
+ vec4 data4;
+} PushConstants;
+
+float Noise2d( in vec2 x )
+{
+    float xhash = cos( x.x * 37.0f );
+    float yhash = cos( x.y * 57.0f );
+    return fract( 415.92f * ( xhash + yhash ) );
+}
+
+// Convert Noise2d() into a "star field" by stomping everthing below fThreshhold to zero.
+float NoisyStarField( in vec2 vSamplePos, float fThreshhold )
+{
+    float StarVal = Noise2d( vSamplePos );
+    if ( StarVal >= fThreshhold )
+        StarVal = pow( (StarVal - fThreshhold)/(1.0f - fThreshhold), 6.0f );
+    else
+        StarVal = 0.0f;
+    return StarVal;
+}
+
+// Stabilize NoisyStarField() by only sampling at integer values.
+float StableStarField( in vec2 vSamplePos, float fThreshhold )
+{
+    // Linear interpolation between four samples.
+    // Note: This approach has some visual artifacts.
+    // There must be a better way to "anti alias" the star field.
+    float fractX = fract( vSamplePos.x );
+    float fractY = fract( vSamplePos.y );
+    vec2 floorSample = floor( vSamplePos );
+    float v1 = NoisyStarField( floorSample, fThreshhold );
+    float v2 = NoisyStarField( floorSample + vec2( 0.0f, 1.0f ), fThreshhold );
+    float v3 = NoisyStarField( floorSample + vec2( 1.0f, 0.0f ), fThreshhold );
+    float v4 = NoisyStarField( floorSample + vec2( 1.0f, 1.0f ), fThreshhold );
+
+    float StarVal =   v1 * ( 1.0f - fractX ) * ( 1.0f - fractY )
+        			+ v2 * ( 1.0f - fractX ) * fractY
+        			+ v3 * fractX * ( 1.0f - fractY )
+        			+ v4 * fractX * fractY;
+	return StarVal;
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec2 iResolution = imageSize(image);
+	// Sky Background Color
+	//vec3 vColor = vec3( 0.1f, 0.2f, 0.4f ) * fragCoord.y / iResolution.y;
+    vec3 vColor = PushConstants.data1.xyz * fragCoord.y / iResolution.y;
+
+    // Note: Choose fThreshhold in the range [0.99, 0.9999].
+    // Higher values (i.e., closer to one) yield a sparser starfield.
+    float StarFieldThreshhold = PushConstants.data1.w;//0.97;
+
+    // Stars with a slow crawl.
+    float xRate = 0.2f;
+    float yRate = -0.06f;
+    vec2 vSamplePos = fragCoord.xy + vec2( xRate * 1.0f, yRate * 1.0f );
+	float StarVal = StableStarField( vSamplePos, StarFieldThreshhold );
+    vColor += vec3( StarVal );
+
+	fragColor = vec4(vColor, 1.0f);
+}
+
+
+
+void main()
+{
+	vec4 value = vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(image);
+    if(texelCoord.x < size.x && texelCoord.y < size.y)
+    {
+        vec4 color;
+        mainImage(color,texelCoord);
+
+        imageStore(image, texelCoord, color);
+    }
+}

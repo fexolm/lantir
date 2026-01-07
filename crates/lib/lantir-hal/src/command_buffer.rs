@@ -1,7 +1,9 @@
 ﻿use crate::barriers::ImageBarrier;
 use crate::barriers::{get_image_memory_barrier, make_subresource_range};
 use crate::device::Device;
-use crate::{ComputePipeline, DescriptorSet, Image, PipelineLayout, RenderEngine};
+use crate::{
+    ComputePipeline, DescriptorSet, GraphicsPipeline, Image, PipelineLayout, RenderEngine,
+};
 use ash::vk;
 use ash::vk::Extent2D;
 
@@ -141,20 +143,37 @@ impl CommandBuffer {
                 .cmd_blit_image2(self.command_buffer, &blit_info);
         }
     }
-    
+
     pub fn cmd_bind_compute_pipeline(&self, engine: &RenderEngine, pipeline: &ComputePipeline) {
         unsafe {
-            engine
-                .device
-                .cmd_bind_pipeline(self.command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
+            engine.device.cmd_bind_pipeline(
+                self.command_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline.pipeline,
+            );
         }
     }
-    
-    pub fn cmd_bind_descriptor_set(&self, engine: &RenderEngine, pipeline_layout: &PipelineLayout, descriptor_set: &DescriptorSet) {
+
+    pub fn cmd_bind_graphics_pipeline(&self, engine: &RenderEngine, pipeline: &GraphicsPipeline) {
+        unsafe {
+            engine.device.cmd_bind_pipeline(
+                self.command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.pipeline,
+            );
+        }
+    }
+
+    pub fn cmd_bind_descriptor_set(
+        &self,
+        engine: &RenderEngine,
+        pipeline_layout: &PipelineLayout,
+        descriptor_set: &DescriptorSet,
+    ) {
         unsafe {
             engine.device.cmd_bind_descriptor_sets(
                 self.command_buffer,
-                vk::PipelineBindPoint::COMPUTE, 
+                vk::PipelineBindPoint::COMPUTE,
                 pipeline_layout.layout,
                 0,
                 &[descriptor_set.get()],
@@ -162,10 +181,114 @@ impl CommandBuffer {
             )
         };
     }
-    
-    pub fn cmd_dispatch(&self, engine: &RenderEngine, group_count_x: u32, group_count_y: u32, group_count_z: u32) {
+
+    pub fn cmd_dispatch(
+        &self,
+        engine: &RenderEngine,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) {
         unsafe {
-            engine.device.cmd_dispatch(self.command_buffer, group_count_x, group_count_y, group_count_z);
+            engine.device.cmd_dispatch(
+                self.command_buffer,
+                group_count_x,
+                group_count_y,
+                group_count_z,
+            );
+        }
+    }
+
+    pub fn cmd_push_constants<T: Sized>(
+        &self,
+        engine: &RenderEngine,
+        layout: &PipelineLayout,
+        stage: vk::ShaderStageFlags,
+        offset: u32,
+        data: &T,
+    ) {
+        unsafe {
+            let bytes = std::slice::from_raw_parts((data as *const T) as *const u8, size_of::<T>());
+
+            engine.device.cmd_push_constants(
+                self.command_buffer,
+                layout.layout,
+                stage,
+                offset,
+                bytes,
+            );
+        }
+    }
+
+    pub fn cmd_begin_rendering(&self, engine: &RenderEngine, render_info: &RenderingInfo) {
+        let color_attachments: Vec<vk::RenderingAttachmentInfo> = render_info
+            .color_attachments
+            .iter()
+            .map(|att| att.to_vk())
+            .collect();
+
+        let mut vk_info = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: render_info.extent,
+            })
+            .layer_count(1)
+            .color_attachments(&color_attachments);
+
+        let vk_depth_attachment;
+        if let Some(depth_attachment) = render_info.depth_attachment {
+            vk_depth_attachment = depth_attachment.to_vk();
+            vk_info = vk_info.depth_attachment(&vk_depth_attachment);
+        }
+
+        unsafe {
+            engine
+                .device
+                .cmd_begin_rendering(self.command_buffer, &vk_info)
+        }
+    }
+
+    pub fn cmd_set_viewport(&self, engine: &RenderEngine, extent: Extent2D) {
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+
+        unsafe {
+            engine
+                .device
+                .cmd_set_viewport(self.command_buffer, 0, &[viewport]);
+        }
+    }
+
+    pub fn cmd_set_scissor(&self, engine: &RenderEngine, extent: Extent2D) {
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        unsafe {
+            engine
+                .device
+                .cmd_set_scissor(self.command_buffer, 0, &[scissor]);
+        }
+    }
+
+    pub fn cmd_draw(&self, engine: &RenderEngine, vertex_count: u32, instance_count: u32) {
+        unsafe {
+            engine
+                .device
+                .cmd_draw(self.command_buffer, vertex_count, instance_count, 0, 0);
+        }
+    }
+
+    pub fn cmd_end_rendering(&self, engine: &RenderEngine) {
+        unsafe {
+            engine.device.cmd_end_rendering(self.command_buffer);
         }
     }
 }
@@ -180,4 +303,25 @@ pub struct CopyImageInfo<'i> {
     pub dst_layout: vk::ImageLayout,
     pub dst_aspect_mask: vk::ImageAspectFlags,
     pub dst_extent: Extent2D,
+}
+
+pub struct RenderingAttachmentInfo<'i> {
+    pub image: &'i dyn Image,
+    pub layout: vk::ImageLayout,
+}
+
+impl RenderingAttachmentInfo<'_> {
+    pub fn to_vk(&self) -> vk::RenderingAttachmentInfo {
+        vk::RenderingAttachmentInfo::default()
+            .image_view(self.image.get_image_view())
+            .image_layout(self.layout)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+    }
+}
+
+pub struct RenderingInfo<'i> {
+    pub color_attachments: &'i [RenderingAttachmentInfo<'i>],
+    pub depth_attachment: Option<&'i RenderingAttachmentInfo<'i>>,
+    pub extent: Extent2D,
 }

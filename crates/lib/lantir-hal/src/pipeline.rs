@@ -11,8 +11,9 @@ impl PipelineLayout {
     pub fn new(
         engine: Arc<RenderEngine>,
         descriptor_sets: Vec<Arc<DescriptorSetLayout>>,
+        push_constants: &[vk::PushConstantRange],
     ) -> anyhow::Result<Arc<Self>> {
-        let data = PipelineLayoutData::new(&engine, descriptor_sets)?;
+        let data = PipelineLayoutData::new(&engine, descriptor_sets, push_constants)?;
         Ok(Arc::new(Resource::make(engine, data)))
     }
 }
@@ -27,10 +28,13 @@ impl PipelineLayoutData {
     pub fn new(
         engine: &RenderEngine,
         descriptor_sets: Vec<Arc<DescriptorSetLayout>>,
+        push_constants: &[vk::PushConstantRange],
     ) -> anyhow::Result<Self> {
         let layouts = descriptor_sets.iter().map(|s| s.layout).collect::<Vec<_>>();
 
-        let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts);
+        let info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&layouts)
+            .push_constant_ranges(push_constants);
 
         let layout = unsafe { engine.device.create_pipeline_layout(&info, None)? };
 
@@ -101,6 +105,130 @@ impl ComputePipelineData {
 }
 
 impl DeferDrop for ComputePipelineData {
+    fn destroy(&mut self, engine: &RenderEngine) {
+        unsafe {
+            engine.device.destroy_pipeline(self.pipeline, None);
+        }
+    }
+}
+
+pub struct GraphicsPipelineCreateInfo<'i> {
+    pub vertex_shader: &'i Arc<Shader>,
+    pub fragment_shader: &'i Arc<Shader>,
+    pub layout: &'i Arc<PipelineLayout>,
+    pub topology: vk::PrimitiveTopology,
+    pub polygon_mode: vk::PolygonMode,
+    pub cull_mode: vk::CullModeFlags,
+    pub front_face: vk::FrontFace,
+    pub color_attachment_format: vk::Format,
+    pub depth_format: vk::Format,
+}
+
+pub type GraphicsPipeline = Resource<GraphicsPipelineData>;
+
+impl GraphicsPipeline {
+    pub fn new(
+        engine: Arc<RenderEngine>,
+        create_info: &GraphicsPipelineCreateInfo,
+    ) -> anyhow::Result<Self> {
+        let data = GraphicsPipelineData::new(&engine, create_info)?;
+        Ok(Resource::make(engine.clone(), data))
+    }
+}
+
+pub struct GraphicsPipelineData {
+    pub(crate) pipeline: vk::Pipeline,
+
+    layout: Arc<PipelineLayout>,
+    shaders: [Arc<Shader>; 2],
+}
+
+impl GraphicsPipelineData {
+    pub fn new(
+        engine: &RenderEngine,
+        create_info: &GraphicsPipelineCreateInfo,
+    ) -> anyhow::Result<Self> {
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(create_info.vertex_shader.shader)
+                .name(c"main"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(create_info.fragment_shader.shader)
+                .name(c"main"),
+        ];
+
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+
+        let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(create_info.topology)
+            .primitive_restart_enable(false);
+
+        let tesselation_state = vk::PipelineTessellationStateCreateInfo::default();
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(create_info.polygon_mode)
+            .line_width(1.)
+            .cull_mode(create_info.cull_mode)
+            .front_face(create_info.front_face);
+
+        let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default();
+
+        let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+
+        let color_blending_state = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachments);
+
+        let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
+            .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
+
+        let color_attachment_formats = [create_info.color_attachment_format];
+
+        let mut render_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_attachment_formats)
+            .depth_attachment_format(create_info.depth_format);
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .push_next(&mut render_info)
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_state)
+            .input_assembly_state(&input_assembly_state)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterization_state)
+            .multisample_state(&multisample_state)
+            .color_blend_state(&color_blending_state)
+            .depth_stencil_state(&depth_stencil_state)
+            .layout(create_info.layout.layout)
+            .dynamic_state(&dynamic_state);
+        let pipeline = unsafe {
+            engine
+                .device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+                .map_err(|(_, e)| e)?[0]
+        };
+
+        Ok(GraphicsPipelineData {
+            pipeline,
+            layout: create_info.layout.clone(),
+            shaders: [
+                create_info.vertex_shader.clone(),
+                create_info.fragment_shader.clone(),
+            ],
+        })
+    }
+}
+
+impl DeferDrop for GraphicsPipelineData {
     fn destroy(&mut self, engine: &RenderEngine) {
         unsafe {
             engine.device.destroy_pipeline(self.pipeline, None);

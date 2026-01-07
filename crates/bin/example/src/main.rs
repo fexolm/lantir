@@ -1,7 +1,8 @@
 ﻿use lantir_hal::{
-    vk, AccessType, ComputePipeline, CopyImageInfo, DescriptorSet,
-    DescriptorSetBinding, DescriptorSetLayout, ImageBarrier, PipelineLayout, RenderEngine, RenderEngineConfig,
-    Shader, Texture, TextureCreateInfo, UpdateFrequency, WriteImageInfo,
+    vk, AccessType, CopyImageInfo, DescriptorSet, DescriptorSetBinding,
+    DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineCreateInfo, ImageBarrier, PipelineLayout,
+    RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo, Shader, Texture,
+    TextureCreateInfo, UpdateFrequency,
 };
 use shaderc::{CompilationArtifact, ShaderKind};
 use std::sync::Arc;
@@ -12,17 +13,23 @@ use winit::window::{Window, WindowBuilder};
 const WINDOW_WIDTH: u32 = 1300;
 const WINDOW_HEIGHT: u32 = 900;
 
-fn compile_shader(name: &str, source: &str, shader_kind: ShaderKind) -> anyhow::Result<CompilationArtifact> {
+fn compile_shader(
+    name: &str,
+    source: &str,
+    shader_kind: ShaderKind,
+) -> anyhow::Result<CompilationArtifact> {
     let mut compiler = shaderc::Compiler::new()?;
-    let options = shaderc::CompileOptions::new()?;
+    let mut options = shaderc::CompileOptions::new()?;
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_3 as u32,
+    );
+    options.set_target_spirv(shaderc::SpirvVersion::V1_5);
 
-    let binary_result = compiler.compile_into_spirv(
-        source,
-        shader_kind,
-        name,
-        "main",
-        Some(&options),
-    )?;
+    options.set_optimization_level(shaderc::OptimizationLevel::Performance);
+
+    let binary_result =
+        compiler.compile_into_spirv(source, shader_kind, name, "main", Some(&options))?;
 
     assert_eq!(Some(&0x07230203), binary_result.as_binary().first());
 
@@ -34,9 +41,18 @@ struct App {
     window: Window,
     frame_num: f32,
     texture: Texture,
-    pipeline: ComputePipeline,
+    pipeline: GraphicsPipeline,
     pipeline_layout: Arc<PipelineLayout>,
     descriptor_set: DescriptorSet,
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+struct ComputePushConstants {
+    data1: glam::Vec4,
+    data2: glam::Vec4,
+    data3: glam::Vec4,
+    data4: glam::Vec4,
 }
 
 impl App {
@@ -62,16 +78,26 @@ impl App {
                 width: 800,
                 height: 600,
             },
-            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
         };
 
         let texture = Texture::new(engine.clone(), &image_create_info)?;
 
-        let shader_code = include_str!("shaders/gradient.comp");
+        let frag_shader = {
+            let code = include_str!("shaders/triangle.frag");
+            Shader::new(
+                engine.clone(),
+                compile_shader("gradient", code, ShaderKind::Fragment)?.as_binary_u8(),
+            )?
+        };
 
-        println!("{shader_code}");
-
-        let shader = Shader::new(engine.clone(), compile_shader("gradient", shader_code, ShaderKind::Compute)?.as_binary_u8())?;
+        let vert_shader = {
+            let code = include_str!("shaders/triangle.vert");
+            Shader::new(
+                engine.clone(),
+                compile_shader("gradient", code, ShaderKind::Vertex)?.as_binary_u8(),
+            )?
+        };
 
         let draw_image_descriptor_layout = DescriptorSetLayout::new(
             engine.clone(),
@@ -85,10 +111,21 @@ impl App {
         let descriptor_set =
             DescriptorSet::new(engine.clone(), draw_image_descriptor_layout.clone())?;
 
-        let pipeline_layout =
-            PipelineLayout::new(engine.clone(), vec![draw_image_descriptor_layout])?;
+        let pipeline_layout = PipelineLayout::new(engine.clone(), vec![], &[])?;
 
-        let pipeline = ComputePipeline::new(engine.clone(), pipeline_layout.clone(), shader)?;
+        let pipeline_info = GraphicsPipelineCreateInfo {
+            vertex_shader: &vert_shader,
+            fragment_shader: &frag_shader,
+            layout: &pipeline_layout,
+            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            polygon_mode: vk::PolygonMode::FILL,
+            cull_mode: vk::CullModeFlags::NONE,
+            front_face: vk::FrontFace::CLOCKWISE,
+            color_attachment_format: vk::Format::R8G8B8A8_UNORM,
+            depth_format: vk::Format::UNDEFINED,
+        };
+
+        let pipeline = GraphicsPipeline::new(engine.clone(), &pipeline_info)?;
 
         Ok(App {
             window,
@@ -116,17 +153,17 @@ impl App {
     }
 
     fn draw_frame(&mut self) {
+        self.frame_num += 1f32;
+
+        let extent = vk::Extent2D {
+            width: 800,
+            height: 600,
+        };
+
         let engine = &self.engine;
         let frame = engine.begin_frame().unwrap();
 
         let swapchain_image = engine.acquire_swapchain_image(&frame).unwrap();
-
-        self.descriptor_set.write_image(&WriteImageInfo {
-            binding: 0,
-            image: &self.texture,
-            layout: vk::ImageLayout::GENERAL,
-            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-        });
 
         let cb = frame.get_render_command_buffer();
 
@@ -134,17 +171,48 @@ impl App {
             &engine,
             &ImageBarrier {
                 previous_accesses: &[AccessType::Nothing],
-                next_accesses: &[AccessType::ComputeShaderWrite],
+                next_accesses: &[AccessType::FragmentShaderWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
-                next_layout: vk::ImageLayout::GENERAL,
+                next_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 image: &self.texture,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );
 
-        cb.cmd_bind_compute_pipeline(&engine, &self.pipeline);
-        cb.cmd_bind_descriptor_set(&engine, &self.pipeline_layout, &self.descriptor_set);
-        cb.cmd_dispatch(&engine, 800 / 16, 600 / 16, 1);
+        // cb.cmd_bind_descriptor_set(&engine, &self.pipeline_layout, &self.descriptor_set);
+
+        cb.cmd_begin_rendering(
+            &engine,
+            &RenderingInfo {
+                color_attachments: &[RenderingAttachmentInfo {
+                    image: &self.texture,
+                    layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                }],
+                depth_attachment: None,
+                extent,
+            },
+        );
+
+        cb.cmd_bind_graphics_pipeline(&engine, &self.pipeline);
+
+        cb.cmd_set_viewport(&engine, extent);
+        cb.cmd_set_scissor(&engine, extent);
+
+        cb.cmd_draw(&engine, 3, 1);
+
+        cb.cmd_end_rendering(&engine);
+
+        cb.cmd_image_barrier(
+            &engine,
+            &ImageBarrier {
+                previous_accesses: &[AccessType::ColorAttachmentWrite],
+                next_accesses: &[AccessType::TransferRead],
+                previous_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                next_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                image: &self.texture,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+            },
+        );
 
         cb.cmd_image_barrier(
             &engine,
@@ -152,25 +220,20 @@ impl App {
                 previous_accesses: &[AccessType::Nothing],
                 next_accesses: &[AccessType::TransferWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
-                next_layout: vk::ImageLayout::GENERAL,
+                next_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 image: &swapchain_image,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );
 
         {
-            let extent = vk::Extent2D {
-                width: 800,
-                height: 600,
-            };
-
             let copy_image_info = CopyImageInfo {
                 src_image: &self.texture,
-                src_layout: vk::ImageLayout::GENERAL,
+                src_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 src_aspect_mask: vk::ImageAspectFlags::COLOR,
                 src_extent: extent,
                 dst_image: &swapchain_image,
-                dst_layout: vk::ImageLayout::GENERAL,
+                dst_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 dst_aspect_mask: vk::ImageAspectFlags::COLOR,
                 dst_extent: extent,
             };
@@ -181,7 +244,7 @@ impl App {
         let image_barrier = ImageBarrier {
             previous_accesses: &[AccessType::TransferWrite],
             next_accesses: &[AccessType::Present],
-            previous_layout: vk::ImageLayout::GENERAL,
+            previous_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             next_layout: vk::ImageLayout::PRESENT_SRC_KHR,
             image: &swapchain_image,
             aspect_mask: vk::ImageAspectFlags::COLOR,

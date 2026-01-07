@@ -63,6 +63,10 @@ impl RenderEngine {
                         ty: vk::DescriptorType::SAMPLER,
                         descriptor_count: 4096,
                     },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::STORAGE_IMAGE,
+                        descriptor_count: 4096,
+                    },
                 ];
 
                 let create_info = vk::DescriptorPoolCreateInfo::default()
