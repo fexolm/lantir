@@ -1,11 +1,15 @@
-﻿use gltf::Gltf;
+﻿mod material;
+mod render_object;
+
+use crate::material::MetallicRoughnessMat;
+use crate::render_object::{load_mesh, RenderObject, Vertex};
+use gltf::Gltf;
+use lantir_hal::vk::ImageType;
 use lantir_hal::{
-    AccessType, AllocationCreateFlags, BlendingMode, Buffer, CopyImageInfo, DescriptorSet,
-    DescriptorSetBinding, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineCreateInfo,
-    ImageBarrier, PipelineLayout, RenderEngine, RenderEngineConfig, RenderingAttachmentInfo,
-    RenderingInfo, Shader, Texture, TextureCreateInfo, UpdateFrequency, vk,
+    vk, AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo,
+    CopyBufferImageInfo, CopyImageInfo, ImageBarrier, RenderEngine, RenderEngineConfig,
+    RenderingAttachmentInfo, RenderingInfo, Texture, TextureCreateInfo, UpdateFrequency,
 };
-use shaderc::{CompilationArtifact, ShaderKind};
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -14,160 +18,102 @@ use winit::window::{Window, WindowBuilder};
 const WINDOW_WIDTH: u32 = 1300;
 const WINDOW_HEIGHT: u32 = 900;
 
-fn compile_shader(
-    name: &str,
-    source: &str,
-    shader_kind: ShaderKind,
-) -> anyhow::Result<CompilationArtifact> {
-    let mut compiler = shaderc::Compiler::new()?;
-    let mut options = shaderc::CompileOptions::new()?;
-    options.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_3 as u32,
-    );
-    options.set_target_spirv(shaderc::SpirvVersion::V1_5);
-
-    options.set_optimization_level(shaderc::OptimizationLevel::Performance);
-
-    let binary_result =
-        compiler.compile_into_spirv(source, shader_kind, name, "main", Some(&options))?;
-
-    assert_eq!(Some(&0x07230203), binary_result.as_binary().first());
-
-    Ok(binary_result)
-}
-
 struct App {
     engine: Arc<RenderEngine>,
     window: Window,
     frame_num: f32,
     draw_texture: Texture,
     depth_texture: Texture,
-    pipeline: GraphicsPipeline,
-    pipeline_layout: Arc<PipelineLayout>,
-    descriptor_set: DescriptorSet,
-    mesh: Mesh,
+    objects: Vec<RenderObject>,
     image_extent: vk::Extent2D,
     draw_extent: vk::Extent2D,
 }
 
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-struct GPUDrawPushConstants {
-    world_matrix: glam::Mat4,
-    vert_address: u64,
-}
-
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-struct Vertex {
-    position: glam::Vec3,
-    normal: glam::Vec3,
-    color: glam::Vec4,
-    uv: glam::Vec2,
-}
-
-fn load_mesh(
+fn load_texture(
     engine: Arc<RenderEngine>,
-    vertices: &[Vertex],
-    indices: &[u32],
-) -> anyhow::Result<(Buffer, Buffer)> {
-    let vertex_buffer_size = (std::mem::size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
-
-    let vertex_buffer = Buffer::new(
-        engine.clone(),
-        &lantir_hal::BufferCreateInfo {
-            size: vertex_buffer_size,
-            usage: vk::BufferUsageFlags::VERTEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_DST
-                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            update_frequency: UpdateFrequency::Static,
-            vma_flags: AllocationCreateFlags::empty(),
-        },
-    )?;
-
-    let index_buffer_size = (std::mem::size_of::<u32>() * indices.len()) as vk::DeviceSize;
-
-    let index_buffer = Buffer::new(
-        engine.clone(),
-        &lantir_hal::BufferCreateInfo {
-            size: index_buffer_size,
-            usage: vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            update_frequency: UpdateFrequency::Static,
-            vma_flags: AllocationCreateFlags::empty(),
-        },
-    )?;
-
+    data: &[u8],
+    extent: vk::Extent3D,
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+    mip_levels: u32,
+) -> anyhow::Result<Texture> {
     let staging_buffer = Buffer::new(
         engine.clone(),
-        &lantir_hal::BufferCreateInfo {
-            size: (std::mem::size_of::<Vertex>() * vertices.len()
-                + std::mem::size_of::<u32>() * indices.len()) as u64,
-            usage: vk::BufferUsageFlags::TRANSFER_SRC,
+        &BufferCreateInfo {
+            size: data.len() as u64,
+            update_frequency: UpdateFrequency::Static,
             memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
-            update_frequency: UpdateFrequency::Static,
             vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
         },
     )?;
 
     unsafe {
         let staging_buffer_map = staging_buffer.map()?;
-
-        std::ptr::copy_nonoverlapping(
-            vertices.as_ptr() as *const u8,
-            staging_buffer_map,
-            vertex_buffer_size as usize,
-        );
-
-        std::ptr::copy_nonoverlapping(
-            indices.as_ptr() as *const u8,
-            staging_buffer_map.add(vertex_buffer_size as usize),
-            index_buffer_size as usize,
-        );
-
+        std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, staging_buffer_map, data.len());
         staging_buffer.unmap();
     }
 
+    let texture = Texture::new(
+        engine.clone(),
+        &TextureCreateInfo {
+            image_type: ImageType::TYPE_2D,
+            update_frequency: UpdateFrequency::Static,
+            format,
+            extent,
+            usage,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels,
+        },
+    )?;
+
     engine.immediate_submit(|cb| {
-        cb.cmd_copy_buffer(
+        cb.cmd_image_barrier(
             &engine,
-            &staging_buffer,
-            &vertex_buffer,
-            vk::BufferCopy {
-                src_offset: 0,
-                dst_offset: 0,
-                size: vertex_buffer_size,
+            &ImageBarrier {
+                previous_accesses: &[AccessType::Nothing],
+                next_accesses: &[AccessType::TransferWrite],
+                previous_layout: vk::ImageLayout::UNDEFINED,
+                next_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                image: &texture,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );
-        cb.cmd_copy_buffer(
+
+        cb.cmd_copy_buffer_to_image(
             &engine,
-            &staging_buffer,
-            &index_buffer,
-            vk::BufferCopy {
-                src_offset: vertex_buffer_size,
-                dst_offset: 0,
-                size: index_buffer_size,
+            &CopyBufferImageInfo {
+                buffer: &staging_buffer,
+                image: &texture,
+                image_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                image_aspect_mask: vk::ImageAspectFlags::COLOR,
+                image_extent: extent,
+            },
+        );
+
+        cb.cmd_image_barrier(
+            &engine,
+            &ImageBarrier {
+                previous_accesses: &[AccessType::TransferWrite],
+                next_accesses: &[AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer],
+                previous_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                next_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                image: &texture,
+                aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );
     })?;
 
-    Ok((vertex_buffer, index_buffer))
+    Ok(texture)
 }
 
-struct Mesh {
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    start_index: u32,
-    index_count: u32,
-}
-
-fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Vec<Mesh>> {
+fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Vec<RenderObject>> {
     let gltf = Gltf::from_slice(bytes)?;
 
-    let mut meshes = Vec::new();
+    let mut objects: Vec<_> = Vec::new();
+
+    let mr_mat = MetallicRoughnessMat::new(engine.clone())?;
 
     for mesh in gltf.meshes() {
         for primitive in mesh.primitives() {
@@ -207,18 +153,18 @@ fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Vec<Mesh
                 });
             }
 
-            let (vertex_buffer, index_buffer) = load_mesh(engine.clone(), &vertices, &indices)?;
+            let mesh = load_mesh(engine.clone(), &vertices, &indices)?;
+            let material = mr_mat.new_instance(engine.clone())?;
 
-            meshes.push(Mesh {
-                start_index: 0,
-                index_count: indices.len() as u32,
-                vertex_buffer,
-                index_buffer,
+            objects.push(RenderObject {
+                mesh,
+                material,
+                transform: Default::default(),
             });
         }
     }
 
-    Ok(meshes)
+    Ok(objects)
 }
 
 impl App {
@@ -249,10 +195,14 @@ impl App {
                 image_type: vk::ImageType::TYPE_2D,
                 update_frequency: UpdateFrequency::PerFrame,
                 format: vk::Format::R8G8B8A8_UNORM,
-                extent: image_extent,
+                extent: vk::Extent3D {
+                    width: image_extent.width,
+                    height: image_extent.height,
+                    depth: 1,
+                },
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
-                memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
             },
         )?;
 
@@ -262,69 +212,18 @@ impl App {
                 image_type: vk::ImageType::TYPE_2D,
                 update_frequency: UpdateFrequency::PerFrame,
                 format: vk::Format::D32_SFLOAT,
-                extent: image_extent,
+                extent: vk::Extent3D {
+                    width: image_extent.width,
+                    height: image_extent.height,
+                    depth: 1,
+                },
                 usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 aspect: vk::ImageAspectFlags::DEPTH,
+                mip_levels: 1,
             },
         )?;
 
-        let frag_shader = {
-            let code = include_str!("shaders/triangle.frag");
-            Shader::new(
-                engine.clone(),
-                compile_shader("gradient", code, ShaderKind::Fragment)?.as_binary_u8(),
-            )?
-        };
-
-        let vert_shader = {
-            let code = include_str!("shaders/triangle.vert");
-            Shader::new(
-                engine.clone(),
-                compile_shader("gradient", code, ShaderKind::Vertex)?.as_binary_u8(),
-            )?
-        };
-
-        let draw_image_descriptor_layout = DescriptorSetLayout::new(
-            engine.clone(),
-            &[DescriptorSetBinding {
-                stage: vk::ShaderStageFlags::COMPUTE,
-                typ: vk::DescriptorType::STORAGE_IMAGE,
-                binding: 0,
-            }],
-        )?;
-
-        let descriptor_set =
-            DescriptorSet::new(engine.clone(), draw_image_descriptor_layout.clone())?;
-
-        let push_constants = [vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX,
-            offset: 0,
-            size: std::mem::size_of::<GPUDrawPushConstants>() as u32,
-        }];
-
-        let pipeline_layout = PipelineLayout::new(engine.clone(), vec![], &push_constants)?;
-
-        let pipeline_info = GraphicsPipelineCreateInfo {
-            vertex_shader: &vert_shader,
-            fragment_shader: &frag_shader,
-            layout: &pipeline_layout,
-            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-            polygon_mode: vk::PolygonMode::FILL,
-            cull_mode: vk::CullModeFlags::NONE,
-            front_face: vk::FrontFace::CLOCKWISE,
-            color_attachment_format: vk::Format::R8G8B8A8_UNORM,
-            depth_format: vk::Format::D32_SFLOAT,
-            enable_depth_write: true,
-            depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
-            blending_mode: BlendingMode::AlphaBlend,
-        };
-
-        let pipeline = GraphicsPipeline::new(engine.clone(), &pipeline_info)?;
-
-        let mesh: Mesh = load_glfw(engine.clone(), include_bytes!("assets/basicmesh.glb"))?
-            .pop()
-            .unwrap();
+        let objects = load_glfw(engine.clone(), include_bytes!("assets/basicmesh.glb"))?;
 
         Ok(App {
             window,
@@ -332,12 +231,9 @@ impl App {
             depth_texture,
             engine,
             frame_num: 0f32,
-            pipeline,
-            descriptor_set,
-            pipeline_layout,
-            mesh,
             image_extent,
             draw_extent,
+            objects,
         })
     }
 
@@ -432,39 +328,39 @@ impl App {
             },
         );
 
-        cb.cmd_bind_graphics_pipeline(&engine, &self.pipeline);
+        // cb.cmd_bind_graphics_pipeline(&engine, &self.pipeline);
 
-        cb.cmd_set_viewport(&engine, self.draw_extent);
-        cb.cmd_set_scissor(&engine, self.draw_extent);
+        // cb.cmd_set_viewport(&engine, self.draw_extent);
+        // cb.cmd_set_scissor(&engine, self.draw_extent);
 
-        // let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0));
+        // // let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0));
 
-        let view = self.update_camera(self.frame_num);
+        // let view = self.update_camera(self.frame_num);
 
-        let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
-            70f32.to_radians(),
-            self.draw_extent.width as f32 / self.draw_extent.height as f32,
-            0.1,
-            10000.0,
-        );
-        proj.w_axis.y *= -1.0;
+        // let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
+        //     70f32.to_radians(),
+        //     self.draw_extent.width as f32 / self.draw_extent.height as f32,
+        //     0.1,
+        //     10000.0,
+        // );
+        // proj.w_axis.y *= -1.0;
 
-        let push_constants = GPUDrawPushConstants {
-            world_matrix: proj * view,
-            vert_address: self.mesh.vertex_buffer.get_device_address(),
-        };
+        // let push_constants = GPUDrawPushConstants {
+        //     world_matrix: proj * view,
+        //     vert_address: self.mesh.vertex_buffer.get_device_address(),
+        // };
 
-        cb.cmd_push_constants(
-            &engine,
-            &self.pipeline_layout,
-            vk::ShaderStageFlags::VERTEX,
-            0,
-            &push_constants,
-        );
+        // cb.cmd_push_constants(
+        //     &engine,
+        //     &self.pipeline_layout,
+        //     vk::ShaderStageFlags::VERTEX,
+        //     0,
+        //     &push_constants,
+        // );
 
-        cb.cmd_bind_index_buffer(&engine, &self.mesh.index_buffer, vk::IndexType::UINT32);
+        // cb.cmd_bind_index_buffer(&engine, &self.mesh.index_buffer, vk::IndexType::UINT32);
 
-        cb.cmd_draw_indexed(&engine, self.mesh.index_count, 1);
+        // cb.cmd_draw_indexed(&engine, self.mesh.index_count, 1);
 
         cb.cmd_end_rendering(&engine);
 

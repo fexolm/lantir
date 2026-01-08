@@ -1,5 +1,6 @@
-﻿use crate::resource::{DeferDrop, Resource};
-use crate::{Image, RenderEngine};
+﻿use crate::image::Sampler;
+use crate::resource::{DeferDrop, Resource};
+use crate::{Buffer, Image, RenderEngine, buffer};
 use ash::vk;
 use std::sync::Arc;
 
@@ -27,6 +28,15 @@ pub struct WriteImageInfo<'i> {
     pub image: &'i dyn Image,
     pub layout: vk::ImageLayout,
     pub descriptor_type: vk::DescriptorType,
+    pub sampler: Option<&'i Sampler>,
+}
+
+pub struct WriteBufferInfo<'i> {
+    pub binding: u32,
+    pub buffer: &'i Buffer,
+    pub size: u64,
+    pub offset: u64,
+    pub descriptor_type: vk::DescriptorType,
 }
 
 impl DescriptorSet {
@@ -43,15 +53,40 @@ impl DescriptorSet {
     }
 
     pub fn write_image(&self, image_info: &WriteImageInfo) {
-        let img_infos = [vk::DescriptorImageInfo::default()
+        let mut img_info = vk::DescriptorImageInfo::default()
             .image_view(image_info.image.get_image_view())
-            .image_layout(image_info.layout)];
+            .image_layout(image_info.layout);
+
+        if let Some(sampler) = image_info.sampler {
+            img_info = img_info.sampler(sampler.sampler);
+        }
+
+        let img_infos = [img_info];
 
         let descriptor_write = vk::WriteDescriptorSet::default()
             .dst_set(self.get())
             .dst_binding(image_info.binding)
             .descriptor_type(image_info.descriptor_type)
             .image_info(&img_infos);
+
+        unsafe {
+            self.engine
+                .device
+                .update_descriptor_sets(&[descriptor_write], &[]);
+        }
+    }
+
+    pub fn write_buffer(&self, buffer_info: &WriteBufferInfo) {
+        let buffer_infos = [vk::DescriptorBufferInfo::default()
+            .buffer(buffer_info.buffer.get_buffer())
+            .offset(buffer_info.offset)
+            .range(buffer_info.size)];
+
+        let descriptor_write = vk::WriteDescriptorSet::default()
+            .dst_set(self.get())
+            .dst_binding(buffer_info.binding)
+            .descriptor_type(buffer_info.descriptor_type)
+            .buffer_info(&buffer_infos);
 
         unsafe {
             self.engine

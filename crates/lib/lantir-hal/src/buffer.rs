@@ -6,7 +6,7 @@ use vk_mem::{Alloc, Allocation};
 
 pub type Buffer = Resource<BufferData>;
 
-impl Buffer {
+impl Resource<BufferData> {
     pub fn new(engine: Arc<RenderEngine>, create_info: &BufferCreateInfo) -> anyhow::Result<Self> {
         let data = BufferData::new(&engine, create_info)?;
         Ok(Resource::make(engine, data))

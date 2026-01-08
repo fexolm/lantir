@@ -335,6 +335,21 @@ impl CommandBuffer {
         }
     }
 
+    pub fn cmd_copy_buffer_to_image(&self, engine: &RenderEngine, copy_info: &CopyBufferImageInfo) {
+        let copy_region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(copy_info.image_aspect_mask)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_extent(copy_info.image_extent);
+    }
+
     pub fn cmd_bind_index_buffer(
         &self,
         engine: &RenderEngine,
@@ -362,6 +377,15 @@ pub struct CopyImageInfo<'i> {
     pub dst_layout: vk::ImageLayout,
     pub dst_aspect_mask: vk::ImageAspectFlags,
     pub dst_extent: Extent2D,
+}
+
+pub struct CopyBufferImageInfo<'i> {
+    pub buffer: &'i Buffer,
+
+    pub image: &'i dyn Image,
+    pub image_layout: vk::ImageLayout,
+    pub image_aspect_mask: vk::ImageAspectFlags,
+    pub image_extent: vk::Extent3D,
 }
 
 pub struct RenderingAttachmentInfo<'i> {

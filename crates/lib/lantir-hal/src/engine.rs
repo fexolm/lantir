@@ -1,10 +1,10 @@
-﻿use crate::CommandBuffer;
-use crate::device::Device;
+﻿use crate::device::Device;
 use crate::frame::RenderFrame;
 use crate::instance::Instance;
 use crate::resource::DeferDrop;
 use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
+use crate::CommandBuffer;
 use anyhow::anyhow;
 use ash::vk;
 use std::sync::{Arc, Mutex};
@@ -68,6 +68,10 @@ impl RenderEngine {
                     },
                     vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::STORAGE_IMAGE,
+                        descriptor_count: 4096,
+                    },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                         descriptor_count: 4096,
                     },
                 ];

@@ -18,13 +18,15 @@ mod swapchain;
 pub use ash::vk;
 pub use barriers::{AccessType, ImageBarrier};
 pub use buffer::{Buffer, BufferCreateInfo};
-pub use command_buffer::{CommandBuffer, CopyImageInfo, RenderingAttachmentInfo, RenderingInfo};
+pub use command_buffer::{
+    CommandBuffer, CopyBufferImageInfo, CopyImageInfo, RenderingAttachmentInfo, RenderingInfo,
+};
 pub use descriptor_set::{
-    DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, WriteImageInfo,
+    DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, WriteBufferInfo, WriteImageInfo,
 };
 pub use engine::{RenderEngine, RenderEngineConfig};
 pub use frame::RenderFrame;
-pub use image::{Image, Texture, TextureCreateInfo, UpdateFrequency};
+pub use image::{Image, Sampler, SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency};
 pub use pipeline::{
     BlendingMode, ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout,
 };

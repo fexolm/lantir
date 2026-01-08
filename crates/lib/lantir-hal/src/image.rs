@@ -18,10 +18,10 @@ pub struct TextureCreateInfo {
     pub image_type: vk::ImageType,
     pub update_frequency: UpdateFrequency,
     pub format: vk::Format,
-    pub extent: vk::Extent2D,
+    pub extent: vk::Extent3D,
     pub usage: vk::ImageUsageFlags,
-    pub memory_property: vk::MemoryPropertyFlags,
     pub aspect: vk::ImageAspectFlags,
+    pub mip_levels: u32,
 }
 
 pub type Texture = Resource<TextureData>;
@@ -69,12 +69,8 @@ impl TextureData {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(create_info.image_type)
             .format(create_info.format)
-            .extent(vk::Extent3D {
-                width: create_info.extent.width,
-                height: create_info.extent.height,
-                depth: 1,
-            })
-            .mip_levels(1)
+            .extent(create_info.extent)
+            .mip_levels(create_info.mip_levels)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
@@ -83,8 +79,8 @@ impl TextureData {
             .initial_layout(vk::ImageLayout::UNDEFINED);
 
         let allocation_info = AllocationCreateInfo {
-            usage: MemoryUsage::Auto,
-            required_flags: create_info.memory_property,
+            usage: MemoryUsage::AutoPreferDevice,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ..Default::default()
         };
 
@@ -169,4 +165,40 @@ fn create_imageview(
 
     let image_view = unsafe { device.create_image_view(&view_info, None)? };
     Ok(image_view)
+}
+
+pub type Sampler = Resource<SamplerData>;
+
+impl Sampler {
+    pub fn new(engine: Arc<RenderEngine>, info: &SamplerInfo) -> anyhow::Result<Sampler> {
+        let data = SamplerData::new(&engine, info)?;
+        Ok(Resource::make(engine, data))
+    }
+}
+
+pub struct SamplerData {
+    pub(crate) sampler: vk::Sampler,
+}
+
+pub struct SamplerInfo {
+    filter: vk::Filter,
+}
+
+impl SamplerData {
+    pub fn new(engine: &RenderEngine, info: &SamplerInfo) -> anyhow::Result<SamplerData> {
+        unsafe {
+            let create_info = vk::SamplerCreateInfo::default()
+                .mag_filter(info.filter)
+                .min_filter(info.filter);
+
+            let sampler = engine.device.create_sampler(&create_info, None)?;
+            Ok(SamplerData { sampler })
+        }
+    }
+}
+
+impl DeferDrop for SamplerData {
+    fn destroy(&mut self, engine: &RenderEngine) {
+        unsafe { engine.device.destroy_sampler(self.sampler, None) };
+    }
 }
