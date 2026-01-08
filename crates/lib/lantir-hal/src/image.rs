@@ -1,5 +1,5 @@
-﻿use crate::resource::{DeferDrop, Resource};
-use crate::RenderEngine;
+﻿use crate::RenderEngine;
+use crate::resource::{DeferDrop, Resource};
 use ash::vk;
 use std::sync::Arc;
 use vk_mem::{Alloc, Allocation, AllocationCreateInfo, MemoryUsage};
@@ -21,6 +21,7 @@ pub struct TextureCreateInfo {
     pub extent: vk::Extent2D,
     pub usage: vk::ImageUsageFlags,
     pub memory_property: vk::MemoryPropertyFlags,
+    pub aspect: vk::ImageAspectFlags,
 }
 
 pub type Texture = Resource<TextureData>;
@@ -103,7 +104,7 @@ impl TextureData {
                     &engine.device,
                     image,
                     create_info.format,
-                    vk::ImageAspectFlags::COLOR,
+                    create_info.aspect,
                 )?);
             }
         }

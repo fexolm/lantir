@@ -1,4 +1,5 @@
-﻿use lantir_hal::{
+﻿use gltf::Gltf;
+use lantir_hal::{
     AccessType, AllocationCreateFlags, Buffer, CopyImageInfo, DescriptorSet, DescriptorSetBinding,
     DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineCreateInfo, ImageBarrier,
     PipelineLayout, RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo,
@@ -40,12 +41,13 @@ struct App {
     engine: Arc<RenderEngine>,
     window: Window,
     frame_num: f32,
-    texture: Texture,
+    draw_texture: Texture,
+    depth_texture: Texture,
     pipeline: GraphicsPipeline,
     pipeline_layout: Arc<PipelineLayout>,
     descriptor_set: DescriptorSet,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
+    mesh: Mesh,
+    image_extent: vk::Extent2D,
 }
 
 #[repr(C)]
@@ -154,12 +156,81 @@ fn load_mesh(
     Ok((vertex_buffer, index_buffer))
 }
 
+struct Mesh {
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    start_index: u32,
+    index_count: u32,
+}
+
+fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Vec<Mesh>> {
+    let gltf = Gltf::from_slice(bytes)?;
+
+    let mut meshes = Vec::new();
+
+    for mesh in gltf.meshes() {
+        for primitive in mesh.primitives() {
+            let buffer_data = gltf.blob.as_deref();
+            let reader = primitive.reader(|_buffer| buffer_data);
+
+            let positions: Vec<[f32; 3]> = reader
+                .read_positions()
+                .ok_or_else(|| anyhow::anyhow!("No positions in mesh"))?
+                .collect();
+
+            let normals: Vec<[f32; 3]> = reader
+                .read_normals()
+                .ok_or_else(|| anyhow::anyhow!("No normals in mesh"))?
+                .collect();
+
+            let tex_coords: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .ok_or_else(|| anyhow::anyhow!("No tex coords in mesh"))?
+                .into_f32()
+                .collect();
+
+            let indices: Vec<u32> = reader
+                .read_indices()
+                .ok_or_else(|| anyhow::anyhow!("No indices in mesh"))?
+                .into_u32()
+                .collect();
+
+            let mut vertices = Vec::new();
+
+            for i in 0..positions.len() {
+                vertices.push(Vertex {
+                    position: glam::Vec3::from(positions[i]),
+                    normal: glam::Vec3::from(normals[i]),
+                    color: glam::Vec4::ONE,
+                    uv: glam::Vec2::from(tex_coords[i]),
+                });
+            }
+
+            let (vertex_buffer, index_buffer) = load_mesh(engine.clone(), &vertices, &indices)?;
+
+            meshes.push(Mesh {
+                start_index: 0,
+                index_count: indices.len() as u32,
+                vertex_buffer,
+                index_buffer,
+            });
+        }
+    }
+
+    Ok(meshes)
+}
+
 impl App {
     fn new(event_loop: &EventLoop<()>) -> anyhow::Result<Self> {
         let window = WindowBuilder::new()
             .with_title("Example App")
             .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
             .build(&event_loop)?;
+
+        let image_extent = vk::Extent2D {
+            width: window.inner_size().width,
+            height: window.inner_size().height,
+        };
 
         let engine = {
             let config = RenderEngineConfig {
@@ -169,19 +240,31 @@ impl App {
             RenderEngine::new(&window, &config)?
         };
 
-        let image_create_info = TextureCreateInfo {
-            image_type: vk::ImageType::TYPE_2D,
-            update_frequency: UpdateFrequency::PerFrame,
-            format: vk::Format::R8G8B8A8_UNORM,
-            extent: vk::Extent2D {
-                width: 800,
-                height: 600,
+        let draw_texture = Texture::new(
+            engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::PerFrame,
+                format: vk::Format::R8G8B8A8_UNORM,
+                extent: image_extent,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
+                memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                aspect: vk::ImageAspectFlags::COLOR,
             },
-            usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_SRC,
-            memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        };
+        )?;
 
-        let texture = Texture::new(engine.clone(), &image_create_info)?;
+        let depth_texture = Texture::new(
+            engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::PerFrame,
+                format: vk::Format::D32_SFLOAT,
+                extent: image_extent,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                aspect: vk::ImageAspectFlags::DEPTH,
+            },
+        )?;
 
         let frag_shader = {
             let code = include_str!("shaders/triangle.frag");
@@ -228,46 +311,28 @@ impl App {
             cull_mode: vk::CullModeFlags::NONE,
             front_face: vk::FrontFace::CLOCKWISE,
             color_attachment_format: vk::Format::R8G8B8A8_UNORM,
-            depth_format: vk::Format::UNDEFINED,
+            depth_format: vk::Format::D32_SFLOAT,
+            enable_depth_write: true,
+            depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
         };
 
         let pipeline = GraphicsPipeline::new(engine.clone(), &pipeline_info)?;
 
-        let vertices = vec![
-            Vertex {
-                position: glam::vec3(0.0, -0.5, 0.0),
-                normal: glam::vec3(0.0, 0.0, 1.0),
-                color: glam::vec4(1.0, 0.0, 0.0, 1.0),
-                uv: glam::vec2(0.5, 1.0),
-            },
-            Vertex {
-                position: glam::vec3(0.5, 0.5, 0.0),
-                normal: glam::vec3(0.0, 0.0, 1.0),
-                color: glam::vec4(0.0, 1.0, 0.0, 1.0),
-                uv: glam::vec2(1.0, 0.0),
-            },
-            Vertex {
-                position: glam::vec3(-0.5, 0.5, 0.0),
-                normal: glam::vec3(0.0, 0.0, 1.0),
-                color: glam::vec4(0.0, 0.0, 1.0, 1.0),
-                uv: glam::vec2(0.0, 0.0),
-            },
-        ];
-
-        let indices = vec![0, 1, 2, 2, 1, 3];
-
-        let (vertex_buffer, index_buffer) = load_mesh(engine.clone(), &vertices, &indices)?;
+        let mesh: Mesh = load_glfw(engine.clone(), include_bytes!("assets/basicmesh.glb"))?
+            .pop()
+            .unwrap();
 
         Ok(App {
             window,
-            texture,
+            draw_texture,
+            depth_texture,
             engine,
             frame_num: 0f32,
             pipeline,
             descriptor_set,
             pipeline_layout,
-            vertex_buffer,
-            index_buffer,
+            mesh,
+            image_extent,
         })
     }
 
@@ -285,13 +350,24 @@ impl App {
             .unwrap();
     }
 
+    fn update_camera(&self, frame_num: f32) -> glam::Mat4 {
+        let radius = 5.0; // Радиус вращения камеры вокруг модели
+        let angle = frame_num * 0.01; // Угол вращения (зависит от времени)
+
+        let camera_position = glam::vec3(
+            radius * angle.cos(), // X-координата
+            2.0,                  // Y-координата (высота камеры)
+            radius * angle.sin(), // Z-координата
+        );
+
+        let target = glam::vec3(0.0, 0.0, 0.0); // Центр модели
+        let up = glam::vec3(0.0, 1.0, 0.0); // Вектор "вверх"
+
+        glam::Mat4::look_at_rh(camera_position, target, up)
+    }
+
     fn draw_frame(&mut self) {
         self.frame_num += 1f32;
-
-        let extent = vk::Extent2D {
-            width: 800,
-            height: 600,
-        };
 
         let engine = &self.engine;
         let frame = engine.begin_frame().unwrap();
@@ -300,7 +376,7 @@ impl App {
 
         let cb = frame.get_render_command_buffer();
 
-        cb.begin(engine).unwrap();
+        cb.begin(engine);
 
         cb.cmd_image_barrier(
             &engine,
@@ -309,8 +385,20 @@ impl App {
                 next_accesses: &[AccessType::FragmentShaderWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
                 next_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                image: &self.texture,
+                image: &self.draw_texture,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
+            },
+        );
+
+        cb.cmd_image_barrier(
+            &engine,
+            &ImageBarrier {
+                previous_accesses: &[AccessType::Nothing],
+                next_accesses: &[AccessType::FragmentShaderWrite],
+                previous_layout: vk::ImageLayout::UNDEFINED,
+                next_layout: vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
+                image: &self.depth_texture,
+                aspect_mask: vk::ImageAspectFlags::DEPTH,
             },
         );
 
@@ -320,22 +408,37 @@ impl App {
             &engine,
             &RenderingInfo {
                 color_attachments: &[RenderingAttachmentInfo {
-                    image: &self.texture,
+                    image: &self.draw_texture,
                     layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 }],
-                depth_attachment: None,
-                extent,
+                depth_attachment: Some(&RenderingAttachmentInfo {
+                    image: &self.depth_texture,
+                    layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                }),
+                extent: self.image_extent,
             },
         );
 
         cb.cmd_bind_graphics_pipeline(&engine, &self.pipeline);
 
-        cb.cmd_set_viewport(&engine, extent);
-        cb.cmd_set_scissor(&engine, extent);
+        cb.cmd_set_viewport(&engine, self.image_extent);
+        cb.cmd_set_scissor(&engine, self.image_extent);
+
+        // let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0));
+
+        let view = self.update_camera(self.frame_num);
+
+        let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
+            70f32.to_radians(),
+            self.image_extent.width as f32 / self.image_extent.height as f32,
+            0.1,
+            10000.0,
+        );
+        proj.w_axis.y *= -1.0;
 
         let push_constants = GPUDrawPushConstants {
-            world_matrix: glam::Mat4::from_rotation_y(self.frame_num * 0.01),
-            vert_address: self.vertex_buffer.get_device_address(),
+            world_matrix: proj * view,
+            vert_address: self.mesh.vertex_buffer.get_device_address(),
         };
 
         cb.cmd_push_constants(
@@ -346,9 +449,9 @@ impl App {
             &push_constants,
         );
 
-        cb.cmd_bind_index_buffer(&engine, &self.index_buffer, vk::IndexType::UINT32);
+        cb.cmd_bind_index_buffer(&engine, &self.mesh.index_buffer, vk::IndexType::UINT32);
 
-        cb.cmd_draw_indexed(&engine, 6, 1);
+        cb.cmd_draw_indexed(&engine, self.mesh.index_count, 1);
 
         cb.cmd_end_rendering(&engine);
 
@@ -359,7 +462,7 @@ impl App {
                 next_accesses: &[AccessType::TransferRead],
                 previous_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 next_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                image: &self.texture,
+                image: &self.draw_texture,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );
@@ -378,14 +481,14 @@ impl App {
 
         {
             let copy_image_info = CopyImageInfo {
-                src_image: &self.texture,
+                src_image: &self.draw_texture,
                 src_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 src_aspect_mask: vk::ImageAspectFlags::COLOR,
-                src_extent: extent,
+                src_extent: self.image_extent,
                 dst_image: &swapchain_image,
                 dst_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 dst_aspect_mask: vk::ImageAspectFlags::COLOR,
-                dst_extent: extent,
+                dst_extent: self.image_extent,
             };
 
             cb.cmd_copy_image(&self.engine, &copy_image_info);
@@ -402,7 +505,7 @@ impl App {
 
         cb.cmd_image_barrier(&engine, &image_barrier);
 
-        cb.end(engine).unwrap();
+        cb.end(engine);
 
         engine.submit_and_present(frame, &swapchain_image).unwrap();
     }

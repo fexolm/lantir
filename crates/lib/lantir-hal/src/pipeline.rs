@@ -1,7 +1,7 @@
-﻿use crate::descriptor_set::DescriptorSetLayout;
+﻿use crate::RenderEngine;
+use crate::descriptor_set::DescriptorSetLayout;
 use crate::resource::{DeferDrop, Resource};
 use crate::shader::Shader;
-use crate::RenderEngine;
 use ash::vk;
 use std::sync::Arc;
 
@@ -122,6 +122,8 @@ pub struct GraphicsPipelineCreateInfo<'i> {
     pub front_face: vk::FrontFace,
     pub color_attachment_format: vk::Format,
     pub depth_format: vk::Format,
+    pub enable_depth_write: bool,
+    pub depth_compare_op: vk::CompareOp,
 }
 
 pub type GraphicsPipeline = Resource<GraphicsPipelineData>;
@@ -180,7 +182,14 @@ impl GraphicsPipelineData {
         let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default();
+        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(create_info.enable_depth_write)
+            .depth_compare_op(create_info.depth_compare_op)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false)
+            .min_depth_bounds(0.)
+            .max_depth_bounds(1.);
 
         let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];

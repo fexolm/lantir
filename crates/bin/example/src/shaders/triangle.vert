@@ -1,7 +1,7 @@
 #version 450
 #extension GL_EXT_buffer_reference : require
 
-layout (location = 0) out vec3 outColor;
+layout (location = 0) out vec3 outNormal;
 layout (location = 1) out vec2 outUV;
 
 struct Vertex {
@@ -29,7 +29,7 @@ void main()
 
 	//output data
 	gl_Position = PushConstants.render_matrix *vec4(v.position, 1.0f);
-	outColor = v.color.xyz;
+	outNormal = v.normal;
 	outUV.x = v.uv.x;
 	outUV.y = v.uv.y;
 }
