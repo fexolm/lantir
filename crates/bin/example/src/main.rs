@@ -1,9 +1,9 @@
 ﻿use gltf::Gltf;
 use lantir_hal::{
-    AccessType, AllocationCreateFlags, Buffer, CopyImageInfo, DescriptorSet, DescriptorSetBinding,
-    DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineCreateInfo, ImageBarrier,
-    PipelineLayout, RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo,
-    Shader, Texture, TextureCreateInfo, UpdateFrequency, vk,
+    AccessType, AllocationCreateFlags, BlendingMode, Buffer, CopyImageInfo, DescriptorSet,
+    DescriptorSetBinding, DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineCreateInfo,
+    ImageBarrier, PipelineLayout, RenderEngine, RenderEngineConfig, RenderingAttachmentInfo,
+    RenderingInfo, Shader, Texture, TextureCreateInfo, UpdateFrequency, vk,
 };
 use shaderc::{CompilationArtifact, ShaderKind};
 use std::sync::Arc;
@@ -48,6 +48,7 @@ struct App {
     descriptor_set: DescriptorSet,
     mesh: Mesh,
     image_extent: vk::Extent2D,
+    draw_extent: vk::Extent2D,
 }
 
 #[repr(C)]
@@ -232,6 +233,8 @@ impl App {
             height: window.inner_size().height,
         };
 
+        let draw_extent = image_extent;
+
         let engine = {
             let config = RenderEngineConfig {
                 debug: true,
@@ -314,6 +317,7 @@ impl App {
             depth_format: vk::Format::D32_SFLOAT,
             enable_depth_write: true,
             depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
+            blending_mode: BlendingMode::AlphaBlend,
         };
 
         let pipeline = GraphicsPipeline::new(engine.clone(), &pipeline_info)?;
@@ -333,6 +337,7 @@ impl App {
             pipeline_layout,
             mesh,
             image_extent,
+            draw_extent,
         })
     }
 
@@ -342,6 +347,14 @@ impl App {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::RedrawRequested => self.draw_frame(),
                     WindowEvent::CloseRequested => target.exit(),
+                    WindowEvent::Resized(size) => {
+                        self.draw_extent = vk::Extent2D {
+                            width: size.width,
+                            height: size.height,
+                        };
+
+                        self.engine.recreate_swapchain().unwrap();
+                    }
                     _ => (),
                 },
                 Event::AboutToWait => self.window.request_redraw(),
@@ -421,8 +434,8 @@ impl App {
 
         cb.cmd_bind_graphics_pipeline(&engine, &self.pipeline);
 
-        cb.cmd_set_viewport(&engine, self.image_extent);
-        cb.cmd_set_scissor(&engine, self.image_extent);
+        cb.cmd_set_viewport(&engine, self.draw_extent);
+        cb.cmd_set_scissor(&engine, self.draw_extent);
 
         // let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0));
 
@@ -430,7 +443,7 @@ impl App {
 
         let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
             70f32.to_radians(),
-            self.image_extent.width as f32 / self.image_extent.height as f32,
+            self.draw_extent.width as f32 / self.draw_extent.height as f32,
             0.1,
             10000.0,
         );
@@ -480,15 +493,20 @@ impl App {
         );
 
         {
+            let copy_extent = vk::Extent2D {
+                width: self.draw_extent.width.min(self.image_extent.width),
+                height: self.draw_extent.height.min(self.image_extent.height),
+            };
+
             let copy_image_info = CopyImageInfo {
                 src_image: &self.draw_texture,
                 src_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 src_aspect_mask: vk::ImageAspectFlags::COLOR,
-                src_extent: self.image_extent,
+                src_extent: copy_extent,
                 dst_image: &swapchain_image,
                 dst_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 dst_aspect_mask: vk::ImageAspectFlags::COLOR,
-                dst_extent: self.image_extent,
+                dst_extent: copy_extent,
             };
 
             cb.cmd_copy_image(&self.engine, &copy_image_info);

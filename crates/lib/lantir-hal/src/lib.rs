@@ -25,7 +25,9 @@ pub use descriptor_set::{
 pub use engine::{RenderEngine, RenderEngineConfig};
 pub use frame::RenderFrame;
 pub use image::{Image, Texture, TextureCreateInfo, UpdateFrequency};
-pub use pipeline::{ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout};
+pub use pipeline::{
+    BlendingMode, ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout,
+};
 pub use shader::Shader;
 pub use swapchain::SwapchainImage;
 pub use vk_mem::AllocationCreateFlags;

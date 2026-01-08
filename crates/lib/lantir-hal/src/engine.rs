@@ -1,10 +1,10 @@
-﻿use crate::device::Device;
+﻿use crate::CommandBuffer;
+use crate::device::Device;
 use crate::frame::RenderFrame;
 use crate::instance::Instance;
 use crate::resource::DeferDrop;
 use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
-use crate::{CommandBuffer, command_buffer};
 use anyhow::anyhow;
 use ash::vk;
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ use vk_mem::{Allocator, AllocatorCreateInfo};
 use winit::window::Window;
 
 pub struct RenderEngine {
-    pub(crate) swapchain: Swapchain,
+    pub(crate) swapchain: Mutex<Swapchain>,
     pub(crate) frames: Vec<RenderFrame>,
     current_frame: Mutex<usize>,
     pub(crate) descriptor_pool: vk::DescriptorPool,
@@ -87,7 +87,7 @@ impl RenderEngine {
                 instance,
                 surface,
                 device,
-                swapchain,
+                swapchain: Mutex::new(swapchain),
                 frames,
                 descriptor_pool,
                 allocator,
@@ -96,6 +96,19 @@ impl RenderEngine {
             }))
         }
     }
+
+    pub fn recreate_swapchain(&self) -> anyhow::Result<()> {
+        unsafe {
+            self.device.device_wait_idle()?;
+
+            let mut swc = self.swapchain.lock().unwrap();
+            swc.destroy(&self.device);
+            *swc = Swapchain::new(&self.instance, &self.device, &self.surface)?;
+
+            Ok(())
+        }
+    }
+
     pub fn get_current_frame_index(&self) -> usize {
         let current_frame = self.current_frame.lock().unwrap();
 
@@ -144,14 +157,17 @@ impl RenderEngine {
                 self.device.universal_queue,
             )?;
 
-            self.swapchain.present(&self.device, swapchain_image)?;
+            self.swapchain
+                .lock()
+                .unwrap()
+                .present(&self.device, swapchain_image)?;
         }
 
         Ok(())
     }
 
     pub fn acquire_swapchain_image(&self, frame: &RenderFrame) -> anyhow::Result<SwapchainImage> {
-        unsafe { self.swapchain.acquire_next_image(&frame) }
+        unsafe { self.swapchain.lock().unwrap().acquire_next_image(&frame) }
     }
 
     pub(crate) fn schedule_resource_release(&self, resource: impl DeferDrop + 'static) {
@@ -207,7 +223,7 @@ impl Drop for RenderEngine {
                 frame.destroy(&self);
             }
 
-            self.swapchain.destroy(&self.device);
+            self.swapchain.lock().unwrap().destroy(&self.device);
         }
     }
 }

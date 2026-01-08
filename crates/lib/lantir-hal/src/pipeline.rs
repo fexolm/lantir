@@ -112,6 +112,11 @@ impl DeferDrop for ComputePipelineData {
     }
 }
 
+pub enum BlendingMode {
+    AlphaBlend,
+    Additive,
+}
+
 pub struct GraphicsPipelineCreateInfo<'i> {
     pub vertex_shader: &'i Arc<Shader>,
     pub fragment_shader: &'i Arc<Shader>,
@@ -124,6 +129,7 @@ pub struct GraphicsPipelineCreateInfo<'i> {
     pub depth_format: vk::Format,
     pub enable_depth_write: bool,
     pub depth_compare_op: vk::CompareOp,
+    pub blending_mode: BlendingMode,
 }
 
 pub type GraphicsPipeline = Resource<GraphicsPipelineData>;
@@ -143,6 +149,25 @@ pub struct GraphicsPipelineData {
 
     layout: Arc<PipelineLayout>,
     shaders: [Arc<Shader>; 2],
+}
+
+fn create_color_blend_attachment(mode: &BlendingMode) -> vk::PipelineColorBlendAttachmentState {
+    let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(true)
+        .color_write_mask(vk::ColorComponentFlags::RGBA)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+        .alpha_blend_op(vk::BlendOp::ADD);
+
+    match mode {
+        BlendingMode::AlphaBlend => {
+            blend_attachment.dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        }
+
+        BlendingMode::Additive => blend_attachment.dst_color_blend_factor(vk::BlendFactor::ONE),
+    }
 }
 
 impl GraphicsPipelineData {
@@ -167,7 +192,7 @@ impl GraphicsPipelineData {
             .topology(create_info.topology)
             .primitive_restart_enable(false);
 
-        let tesselation_state = vk::PipelineTessellationStateCreateInfo::default();
+        let tessellation_state = vk::PipelineTessellationStateCreateInfo::default();
 
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
@@ -191,8 +216,7 @@ impl GraphicsPipelineData {
             .min_depth_bounds(0.)
             .max_depth_bounds(1.);
 
-        let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blend_attachments = [create_color_blend_attachment(&create_info.blending_mode)];
 
         let color_blending_state = vk::PipelineColorBlendStateCreateInfo::default()
             .logic_op_enable(false)
@@ -211,6 +235,7 @@ impl GraphicsPipelineData {
             .push_next(&mut render_info)
             .stages(&shader_stages)
             .vertex_input_state(&vertex_input_state)
+            .tessellation_state(&tessellation_state)
             .input_assembly_state(&input_assembly_state)
             .viewport_state(&viewport_state)
             .rasterization_state(&rasterization_state)
