@@ -3,7 +3,6 @@ mod render_object;
 
 use crate::material::{MaterialConstants, MetallicRoughnessMat, SceneData};
 use crate::render_object::{RenderObject, Vertex};
-use glam::{Vec3Swizzles, Vec4Swizzles};
 use gltf::Gltf;
 use lantir_hal::vk::ImageType;
 use lantir_hal::{
@@ -13,12 +12,171 @@ use lantir_hal::{
     Texture, TextureCreateInfo, UpdateFrequency, WriteBufferInfo, vk,
 };
 use std::sync::Arc;
-use winit::event::{Event, WindowEvent};
+use std::time::Instant;
+use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::EventLoop;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowBuilder};
 
 const WINDOW_WIDTH: u32 = 1300;
 const WINDOW_HEIGHT: u32 = 900;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CameraInput {
+    mouse_pressed: bool,
+    last_cursor_pos: Option<(f64, f64)>,
+    pending_mouse_delta: (f32, f32),
+    pending_scroll: f32,
+
+    key_left: bool,
+    key_right: bool,
+    key_up: bool,
+    key_down: bool,
+
+    key_w: bool,
+    key_a: bool,
+    key_s: bool,
+    key_d: bool,
+}
+
+impl CameraInput {
+    fn set_key(&mut self, key: KeyCode, pressed: bool) {
+        match key {
+            KeyCode::ArrowLeft => self.key_left = pressed,
+            KeyCode::ArrowRight => self.key_right = pressed,
+            KeyCode::ArrowUp => self.key_up = pressed,
+            KeyCode::ArrowDown => self.key_down = pressed,
+            KeyCode::KeyW => self.key_w = pressed,
+            KeyCode::KeyA => self.key_a = pressed,
+            KeyCode::KeyS => self.key_s = pressed,
+            KeyCode::KeyD => self.key_d = pressed,
+            _ => {}
+        }
+    }
+
+    fn add_mouse_delta(&mut self, dx: f32, dy: f32) {
+        self.pending_mouse_delta.0 += dx;
+        self.pending_mouse_delta.1 += dy;
+    }
+
+    fn add_scroll(&mut self, scroll: f32) {
+        self.pending_scroll += scroll;
+    }
+
+    fn take_mouse_delta(&mut self) -> (f32, f32) {
+        let delta = self.pending_mouse_delta;
+        self.pending_mouse_delta = (0.0, 0.0);
+        delta
+    }
+
+    fn take_scroll(&mut self) -> f32 {
+        let scroll = self.pending_scroll;
+        self.pending_scroll = 0.0;
+        scroll
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrbitCamera {
+    target: glam::Vec3,
+    radius: f32,
+    yaw: f32,
+    pitch: f32,
+
+    rotate_sensitivity: f32,
+    key_rotate_speed: f32,
+    zoom_sensitivity: f32,
+    move_speed: f32,
+}
+
+impl Default for OrbitCamera {
+    fn default() -> Self {
+        Self {
+            target: glam::Vec3::ZERO,
+            radius: 500.0,
+            yaw: 0.0,
+            pitch: 0.2,
+            rotate_sensitivity: 0.005,
+            key_rotate_speed: 1.5,
+            zoom_sensitivity: 0.12,
+            move_speed: 250.0,
+        }
+    }
+}
+
+impl OrbitCamera {
+    fn update(&mut self, input: &mut CameraInput, dt: f32) {
+        let (dx, dy) = input.take_mouse_delta();
+        self.yaw += dx * self.rotate_sensitivity;
+        self.pitch += -dy * self.rotate_sensitivity;
+
+        let key_yaw = (input.key_right as i32 - input.key_left as i32) as f32;
+        let key_pitch = (input.key_up as i32 - input.key_down as i32) as f32;
+        self.yaw += key_yaw * self.key_rotate_speed * dt;
+        self.pitch += key_pitch * self.key_rotate_speed * dt;
+
+        let scroll = input.take_scroll();
+        if scroll != 0.0 {
+            let zoom_factor = 1.0 - scroll * self.zoom_sensitivity;
+            self.radius = (self.radius * zoom_factor).clamp(0.5, 50_000.0);
+        }
+
+        // WASD pan: move target in the camera's local XZ plane
+        let move_x = (input.key_d as i32 - input.key_a as i32) as f32;
+        let move_z = (input.key_w as i32 - input.key_s as i32) as f32;
+        if move_x != 0.0 || move_z != 0.0 {
+            let cp = self.pitch.cos();
+            let sp = self.pitch.sin();
+            let cy = self.yaw.cos();
+            let sy = self.yaw.sin();
+
+            let camera_offset = glam::vec3(
+                self.radius * cp * cy,
+                self.radius * sp,
+                self.radius * cp * sy,
+            );
+            let camera_position = self.target + camera_offset;
+            let forward = (self.target - camera_position)
+                .try_normalize()
+                .unwrap_or(glam::Vec3::Z);
+            let right = forward
+                .cross(glam::Vec3::Y)
+                .try_normalize()
+                .unwrap_or(glam::Vec3::X);
+
+            let planar_forward = glam::vec3(forward.x, 0.0, forward.z)
+                .try_normalize()
+                .unwrap_or(glam::Vec3::Z);
+
+            let move_dir = (right * move_x + planar_forward * move_z)
+                .try_normalize()
+                .unwrap_or(glam::Vec3::ZERO);
+            let speed = (self.move_speed * (self.radius * 0.002).max(1.0)) * dt;
+            self.target += move_dir * speed;
+        }
+
+        self.pitch = self.pitch.clamp(-1.55, 1.55);
+
+        if self.yaw.abs() > 1000.0 {
+            self.yaw = self.yaw.rem_euclid(std::f32::consts::TAU);
+        }
+    }
+
+    fn view_matrix(&self) -> glam::Mat4 {
+        let cp = self.pitch.cos();
+        let sp = self.pitch.sin();
+        let cy = self.yaw.cos();
+        let sy = self.yaw.sin();
+
+        let camera_offset = glam::vec3(
+            self.radius * cp * cy,
+            self.radius * sp,
+            self.radius * cp * sy,
+        );
+        let camera_position = self.target + camera_offset;
+        glam::Mat4::look_at_rh(camera_position, self.target, glam::Vec3::Y)
+    }
+}
 
 struct App {
     engine: Arc<RenderEngine>,
@@ -31,6 +189,10 @@ struct App {
     scene_uniform: Buffer,
     scene_set: DescriptorSet,
     scene: Scene,
+
+    camera: OrbitCamera,
+    camera_input: CameraInput,
+    last_frame_time: Instant,
 }
 
 fn load_texture(
@@ -204,8 +366,6 @@ fn load_glfw(
                     continue;
                 };
 
-                println!("OK!");
-
                 let positions: Vec<_> = positions.collect();
 
                 let normals: Vec<[f32; 3]> = reader
@@ -235,7 +395,6 @@ fn load_glfw(
                         color: glam::Vec4::ONE,
                         uv: glam::Vec2::from(tex_coords[i]),
                     });
-                    // println!("normals[{}] = {:?}", i, normals[i]);
                 }
 
                 let constants_buf = Buffer::new(
@@ -452,6 +611,10 @@ impl App {
             scene_uniform,
             scene_set,
             scene,
+
+            camera: OrbitCamera::default(),
+            camera_input: CameraInput::default(),
+            last_frame_time: Instant::now(),
         })
     }
 
@@ -469,6 +632,37 @@ impl App {
 
                         self.engine.recreate_swapchain().unwrap();
                     }
+                    WindowEvent::KeyboardInput { event, .. } => {
+                        if let PhysicalKey::Code(code) = event.physical_key {
+                            self.camera_input
+                                .set_key(code, event.state == ElementState::Pressed);
+                        }
+                    }
+                    WindowEvent::MouseInput { state, button, .. } => {
+                        if button == MouseButton::Left {
+                            self.camera_input.mouse_pressed = state == ElementState::Pressed;
+                            if !self.camera_input.mouse_pressed {
+                                self.camera_input.last_cursor_pos = None;
+                            }
+                        }
+                    }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        if self.camera_input.mouse_pressed {
+                            let (x, y) = (position.x, position.y);
+                            if let Some((lx, ly)) = self.camera_input.last_cursor_pos {
+                                self.camera_input
+                                    .add_mouse_delta((x - lx) as f32, (y - ly) as f32);
+                            }
+                            self.camera_input.last_cursor_pos = Some((x, y));
+                        }
+                    }
+                    WindowEvent::MouseWheel { delta, .. } => {
+                        let scroll = match delta {
+                            MouseScrollDelta::LineDelta(_x, y) => y,
+                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 120.0,
+                        };
+                        self.camera_input.add_scroll(scroll);
+                    }
                     _ => (),
                 },
                 Event::AboutToWait => self.window.request_redraw(),
@@ -477,24 +671,19 @@ impl App {
             .unwrap();
     }
 
-    fn update_camera(&self, frame_num: f32) -> glam::Mat4 {
-        let radius = 500.0; // Радиус вращения камеры вокруг модели
-        let angle = frame_num * 0.01; // Угол вращения (зависит от времени)
+    fn update_camera(&mut self) -> glam::Mat4 {
+        let now = Instant::now();
+        let dt = (now - self.last_frame_time).as_secs_f32().min(0.1);
+        self.last_frame_time = now;
 
-        let camera_position = glam::vec3(
-            radius * angle.cos(), // X-координата
-            100.0,                // Y-координата (высота камеры)
-            radius * angle.sin(), // Z-координата
-        );
-
-        let target = glam::vec3(0.0, 0.0, 0.0); // Центр модели
-        let up = glam::vec3(0.0, 1.0, 0.0); // Вектор "вверх"
-
-        glam::Mat4::look_at_rh(camera_position, target, up)
+        self.camera.update(&mut self.camera_input, dt);
+        self.camera.view_matrix()
     }
 
     fn draw_frame(&mut self) {
         self.frame_num += 1f32;
+
+        let view = self.update_camera();
 
         let engine = &self.engine;
         let frame = engine.begin_frame().unwrap();
@@ -503,15 +692,17 @@ impl App {
 
         let cb = frame.get_render_command_buffer();
 
-        let view = self.update_camera(self.frame_num);
-
         let mut proj: glam::Mat4 = glam::Mat4::perspective_rh(
             70f32.to_radians(),
             self.draw_extent.width as f32 / self.draw_extent.height as f32,
             0.1,
             10000.0,
         );
-        proj.w_axis.y *= -1.0;
+
+        // Vulkan's clip space maps to a framebuffer with inverted Y compared to
+        // the common GL-style math used by most camera/projection helpers.
+        // Flipping the projection is the standard fix and avoids per-mesh hacks.
+        proj.y_axis.y *= -1.0;
 
         let scene_data = SceneData {
             view,
