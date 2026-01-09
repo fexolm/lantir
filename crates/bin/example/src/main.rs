@@ -2,14 +2,15 @@
 mod render_object;
 
 use crate::material::{MaterialConstants, MetallicRoughnessMat, SceneData};
-use crate::render_object::{RenderObject, Vertex, load_mesh};
+use crate::render_object::{load_mesh, RenderObject, Vertex};
+use glam::{Vec3Swizzles, Vec4Swizzles};
 use gltf::Gltf;
 use lantir_hal::vk::ImageType;
 use lantir_hal::{
-    AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo, CopyBufferImageInfo,
-    CopyImageInfo, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, ImageBarrier,
-    RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo, Sampler, SamplerInfo,
-    Texture, TextureCreateInfo, UpdateFrequency, WriteBufferInfo, vk,
+    vk, AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo,
+    CopyBufferImageInfo, CopyImageInfo, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout,
+    ImageBarrier, RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo, Sampler,
+    SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency, WriteBufferInfo,
 };
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
@@ -232,7 +233,7 @@ fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Scene> {
             objects.push(RenderObject {
                 mesh,
                 material,
-                transform: glam::Mat4::from_scale(glam::vec3(0.5, 0.5, 0.5)),
+                transform: glam::Mat4::IDENTITY,
             });
         }
     }
@@ -391,7 +392,7 @@ impl App {
 
         let cb = frame.get_render_command_buffer();
 
-        let view = glam::Mat4::IDENTITY;
+        let view = self.update_camera(self.frame_num);
 
         let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
             70f32.to_radians(),
@@ -406,7 +407,7 @@ impl App {
             proj,
             viewproj: proj * view,
             ambient_color: glam::vec4(0.5, 0.5, 0.5, 1.0),
-            sunlignt_direction: glam::vec4(1.0, 1.0, 1.0, 0.0).normalize(),
+            sunlignt_direction: glam::vec4(-0.5, 0.5, 1.0, 0.0).normalize(),
             sunlight_color: glam::vec4(1.0, 1.0, 1.0, 1.0),
         };
 
@@ -484,7 +485,7 @@ impl App {
         cb.cmd_set_viewport(&engine, self.draw_extent);
         cb.cmd_set_scissor(&engine, self.draw_extent);
 
-        self.scene.objects.first().unwrap().draw(&engine, cb, &sds);
+        self.scene.objects[2].draw(&engine, cb, &sds);
 
         cb.cmd_end_rendering(&engine);
 

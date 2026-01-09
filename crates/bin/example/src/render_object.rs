@@ -10,6 +10,7 @@ pub struct Mesh {
     vertex_buffer: Buffer,
     index_buffer: Buffer,
     index_count: u32,
+    pub vertices: Vec<Vertex>,
 }
 
 pub struct RenderObject {
@@ -125,6 +126,7 @@ pub fn load_mesh(
         index_buffer,
         vertex_buffer,
         index_count: indices.len() as u32,
+        vertices: Vec::from(vertices),
     })
 }
 

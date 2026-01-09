@@ -352,6 +352,16 @@ impl CommandBuffer {
                     .layer_count(1),
             )
             .image_extent(copy_info.image_extent);
+
+        unsafe {
+            engine.device.cmd_copy_buffer_to_image(
+                self.command_buffer,
+                copy_info.buffer.get_buffer(),
+                copy_info.image.get_image(),
+                copy_info.image_layout,
+                &[copy_region],
+            );
+        }
     }
 
     pub fn cmd_bind_index_buffer(

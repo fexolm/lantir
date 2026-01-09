@@ -55,6 +55,8 @@ void main()
 
 	gl_Position =  sceneData.viewproj * PushConstants.render_matrix * position;
 
+	// debugPrintfEXT("Position of %u: (%f,%f,%f)", gl_VertexIndex, gl_Position.x, gl_Position.y, gl_Position.z);
+
 	outNormal = (PushConstants.render_matrix * vec4(v.normal, 0.f)).xyz;
 	outColor = v.color.xyz * materialData.colorFactors.xyz;
 	outUV = v.uv;

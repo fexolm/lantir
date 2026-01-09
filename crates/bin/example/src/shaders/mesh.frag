@@ -29,10 +29,17 @@ layout (location = 0) out vec4 outFragColor;
 
 void main()
 {
-	float lightValue = max(dot(inNormal, sceneData.sunlightDirection.xyz), 0.1f);
+    // 1. Берем только текстуру (так как в вершинах цвета нет)
+    vec3 color = texture(colorTex, inUV).xyz;
 
-	vec3 color = inColor * texture(colorTex,inUV).xyz;
-	vec3 ambient = color *  sceneData.ambientColor.xyz;
+    // 2. Считаем освещение
+    // Обязательно нормализуйте inNormal, она могла "поплыть" при интерполяции
+    float lightValue = max(dot(normalize(inNormal), sceneData.sunlightDirection.xyz), 0.0f);
 
-	outFragColor = vec4(color * lightValue *  sceneData.sunlightColor.w + ambient ,1.0f);
+    // 3. Смешиваем (Sunlight + Ambient)
+    // sunlightColor.w должен быть интенсивностью (например, 1.0)
+    vec3 diffuse = color * lightValue * sceneData.sunlightColor.xyz * sceneData.sunlightColor.w;
+    vec3 ambient = color * sceneData.ambientColor.xyz;
+
+    outFragColor = vec4(diffuse + ambient, 1.0f);
 }
