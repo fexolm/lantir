@@ -80,12 +80,12 @@ impl DescriptorSet {
     }
 
     pub fn write_buffer(&self, buffer_info: &WriteBufferInfo) {
-        let buffer_infos = [vk::DescriptorBufferInfo::default()
-            .buffer(buffer_info.buffer.get_buffer())
-            .offset(buffer_info.offset)
-            .range(buffer_info.size)];
+        for (frame_index, &dst_set) in self.descriptor_sets.iter().enumerate() {
+            let buffer_infos = [vk::DescriptorBufferInfo::default()
+                .buffer(buffer_info.buffer.get_handle().get_buffer(frame_index))
+                .offset(buffer_info.offset)
+                .range(buffer_info.size)];
 
-        for &dst_set in &self.descriptor_sets {
             let descriptor_write = vk::WriteDescriptorSet::default()
                 .dst_set(dst_set)
                 .dst_binding(buffer_info.binding)

@@ -52,33 +52,29 @@ impl RenderEngine {
                 let pool_sizes = [
                     vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::UNIFORM_BUFFER,
-                        descriptor_count: 4096,
+                        descriptor_count: 40960,
                     },
                     vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::STORAGE_BUFFER,
-                        descriptor_count: 4096,
+                        descriptor_count: 40960,
                     },
                     vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::SAMPLED_IMAGE,
-                        descriptor_count: 4096,
+                        descriptor_count: 40960,
                     },
                     vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::SAMPLER,
-                        descriptor_count: 4096,
-                    },
-                    vk::DescriptorPoolSize {
-                        ty: vk::DescriptorType::STORAGE_IMAGE,
-                        descriptor_count: 4096,
+                        descriptor_count: 40960,
                     },
                     vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        descriptor_count: 4096,
+                        descriptor_count: 40960,
                     },
                 ];
 
                 let create_info = vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
-                    .max_sets(1000)
+                    .max_sets(100000)
                     .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
 
                 device.create_descriptor_pool(&create_info, None).unwrap()

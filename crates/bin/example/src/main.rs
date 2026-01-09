@@ -2,15 +2,15 @@
 mod render_object;
 
 use crate::material::{MaterialConstants, MetallicRoughnessMat, SceneData};
-use crate::render_object::{load_mesh, RenderObject, Vertex};
+use crate::render_object::{RenderObject, Vertex};
 use glam::{Vec3Swizzles, Vec4Swizzles};
 use gltf::Gltf;
 use lantir_hal::vk::ImageType;
 use lantir_hal::{
-    vk, AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo,
-    CopyBufferImageInfo, CopyImageInfo, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout,
-    ImageBarrier, RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo, Sampler,
-    SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency, WriteBufferInfo,
+    AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo, CopyBufferImageInfo,
+    CopyImageInfo, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, ImageBarrier,
+    RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo, Sampler, SamplerInfo,
+    Texture, TextureCreateInfo, UpdateFrequency, WriteBufferInfo, vk,
 };
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
@@ -29,6 +29,7 @@ struct App {
     image_extent: vk::Extent2D,
     draw_extent: vk::Extent2D,
     scene_uniform: Buffer,
+    scene_set: DescriptorSet,
     scene: Scene,
 }
 
@@ -118,8 +119,14 @@ struct Scene {
     buffers: Vec<Buffer>,
 }
 
-fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Scene> {
-    let gltf = Gltf::from_slice(bytes)?;
+fn load_glfw(
+    engine: Arc<RenderEngine>,
+    gltf_bytes: &[u8],
+    external_buffers: &[(&str, &[u8])],
+) -> anyhow::Result<Scene> {
+    let gltf = Gltf::from_slice(gltf_bytes)?;
+
+    let mut cnt = 0;
 
     let mr_mat = MetallicRoughnessMat::new(engine.clone())?;
 
@@ -155,86 +162,179 @@ fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Scene> {
         },
     )?;
 
-    for mesh in gltf.meshes() {
-        for primitive in mesh.primitives() {
-            let constants_buf = Buffer::new(
-                engine.clone(),
-                &BufferCreateInfo {
-                    size: size_of::<MaterialConstants>() as u64,
-                    update_frequency: UpdateFrequency::PerFrame,
-                    memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
-                        | vk::MemoryPropertyFlags::HOST_COHERENT,
-                    vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                    usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
-                },
-            )?;
+    fn load_node_meshes(
+        node: gltf::Node,
+        gltf: &Gltf,
+        engine: Arc<RenderEngine>,
+        mr_mat: &Arc<MetallicRoughnessMat>,
+        white_texture: &Texture,
+        sampler: &Sampler,
+        external_buffers: &[(&str, &[u8])],
+        parent_transform: glam::Mat4,
+        objects: &mut Vec<RenderObject>,
+        buffers: &mut Vec<Buffer>,
+        cnt: &mut usize,
+    ) -> anyhow::Result<()> {
+        let local_transform = match node.transform() {
+            gltf::scene::Transform::Matrix { matrix } => glam::Mat4::from_cols_array_2d(&matrix),
+            gltf::scene::Transform::Decomposed {
+                translation,
+                rotation,
+                scale,
+            } => {
+                let t = glam::Mat4::from_translation(glam::Vec3::from(translation));
+                let r = glam::Mat4::from_quat(glam::Quat::from_array(rotation));
+                let s = glam::Mat4::from_scale(glam::Vec3::from(scale));
+                t * r * s
+            }
+        };
 
-            let buffer_data = gltf.blob.as_deref();
-            let reader = primitive.reader(|_buffer| buffer_data);
+        let world_transform = parent_transform * local_transform;
 
-            let positions: Vec<[f32; 3]> = reader
-                .read_positions()
-                .ok_or_else(|| anyhow::anyhow!("No positions in mesh"))?
-                .collect();
+        if let Some(mesh) = node.mesh() {
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|buffer| match buffer.source() {
+                    gltf::buffer::Source::Bin => gltf.blob.as_deref(),
+                    gltf::buffer::Source::Uri(uri) => external_buffers
+                        .iter()
+                        .find_map(|(name, bytes)| (*name == uri).then_some(*bytes)),
+                });
 
-            let normals: Vec<[f32; 3]> = reader
-                .read_normals()
-                .ok_or_else(|| anyhow::anyhow!("No normals in mesh"))?
-                .collect();
+                let Some(positions) = reader.read_positions() else {
+                    continue;
+                };
 
-            let tex_coords: Vec<[f32; 2]> = reader
-                .read_tex_coords(0)
-                .ok_or_else(|| anyhow::anyhow!("No tex coords in mesh"))?
-                .into_f32()
-                .collect();
+                println!("OK!");
 
-            let indices: Vec<u32> = reader
-                .read_indices()
-                .ok_or_else(|| anyhow::anyhow!("No indices in mesh"))?
-                .into_u32()
-                .collect();
+                let positions: Vec<_> = positions.collect();
 
-            let mut vertices = Vec::new();
+                let normals: Vec<[f32; 3]> = reader
+                    .read_normals()
+                    .ok_or_else(|| anyhow::anyhow!("No normals in mesh"))?
+                    .collect();
 
-            for i in 0..positions.len() {
-                vertices.push(Vertex {
-                    position: glam::Vec3::from(positions[i]),
-                    normal: glam::Vec3::from(normals[i]),
-                    color: glam::Vec4::ONE,
-                    uv: glam::Vec2::from(tex_coords[i]),
+                let tex_coords: Vec<[f32; 2]> = if let Some(tex_coords) = reader.read_tex_coords(0)
+                {
+                    tex_coords.into_f32().collect()
+                } else {
+                    vec![[0.0, 0.0]; positions.len()]
+                };
+
+                let indices: Vec<u32> = reader
+                    .read_indices()
+                    .ok_or_else(|| anyhow::anyhow!("No indices in mesh"))?
+                    .into_u32()
+                    .collect();
+
+                let mut vertices = Vec::new();
+
+                for i in 0..positions.len() {
+                    vertices.push(Vertex {
+                        position: glam::Vec3::from(positions[i]),
+                        normal: glam::Vec3::from(normals[i]),
+                        color: glam::Vec4::ONE,
+                        uv: glam::Vec2::from(tex_coords[i]),
+                    });
+                    // println!("normals[{}] = {:?}", i, normals[i]);
+                }
+
+                let constants_buf = Buffer::new(
+                    engine.clone(),
+                    &BufferCreateInfo {
+                        size: size_of::<MaterialConstants>() as u64,
+                        update_frequency: UpdateFrequency::PerFrame,
+                        memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
+                            | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                        usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
+                    },
+                )?;
+
+                let mesh = crate::render_object::load_mesh(engine.clone(), &vertices, &indices)?;
+                let material = mr_mat.new_instance(engine.clone())?;
+
+                *cnt += 1;
+
+                let constants = MaterialConstants {
+                    color_factors: glam::Vec4::from_array(
+                        primitive
+                            .material()
+                            .pbr_metallic_roughness()
+                            .base_color_factor(),
+                    ),
+                    metal_rough_factors: glam::Vec4::new(
+                        primitive
+                            .material()
+                            .pbr_metallic_roughness()
+                            .metallic_factor(),
+                        primitive
+                            .material()
+                            .pbr_metallic_roughness()
+                            .roughness_factor(),
+                        0.,
+                        0.,
+                    ),
+                    extra: [Default::default(); 14],
+                };
+
+                unsafe {
+                    let data = constants_buf.map()?;
+                    std::ptr::copy_nonoverlapping(
+                        (&constants) as *const MaterialConstants as *const u8,
+                        data,
+                        size_of::<MaterialConstants>(),
+                    );
+                    constants_buf.unmap();
+                }
+
+                material.set_material_constants(&constants_buf, 0);
+                material.set_color_image(&white_texture, &sampler);
+                material.set_metal_rough_image(&white_texture, &sampler);
+
+                buffers.push(constants_buf);
+
+                objects.push(RenderObject {
+                    mesh,
+                    material,
+                    transform: world_transform,
                 });
             }
+        }
 
-            let mesh = load_mesh(engine.clone(), &vertices, &indices)?;
-            let material = mr_mat.new_instance(engine.clone())?;
+        for child in node.children() {
+            load_node_meshes(
+                child,
+                gltf,
+                engine.clone(),
+                mr_mat,
+                white_texture,
+                sampler,
+                external_buffers,
+                world_transform,
+                objects,
+                buffers,
+                cnt,
+            )?;
+        }
 
-            let constants = MaterialConstants {
-                color_factors: Default::default(),
-                metal_rough_factors: Default::default(),
-                extra: [Default::default(); 14],
-            };
+        Ok(())
+    }
 
-            unsafe {
-                let data = constants_buf.map()?;
-                std::ptr::copy_nonoverlapping(
-                    (&constants) as *const MaterialConstants as *const u8,
-                    data,
-                    size_of::<SceneData>(),
-                );
-                constants_buf.unmap();
-            }
-
-            material.set_material_constants(&constants_buf, 0);
-            material.set_color_image(&white_texture, &sampler);
-            material.set_metal_rough_image(&white_texture, &sampler);
-
-            buffers.push(constants_buf);
-
-            objects.push(RenderObject {
-                mesh,
-                material,
-                transform: glam::Mat4::IDENTITY,
-            });
+    for scene in gltf.scenes() {
+        for node in scene.nodes() {
+            load_node_meshes(
+                node,
+                &gltf,
+                engine.clone(),
+                &mr_mat,
+                &white_texture,
+                &sampler,
+                external_buffers,
+                glam::Mat4::IDENTITY,
+                &mut objects,
+                &mut buffers,
+                &mut cnt,
+            )?;
         }
     }
 
@@ -305,18 +405,6 @@ impl App {
             },
         )?;
 
-        let scene_dsl = {
-            let bindings = [DescriptorSetBinding {
-                typ: vk::DescriptorType::UNIFORM_BUFFER,
-                binding: 0,
-                stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-            }];
-            DescriptorSetLayout::new(engine.clone(), &bindings).unwrap()
-        };
-
-        let scene_descriptor_set =
-            DescriptorSet::new(engine.clone(), scene_dsl.clone(), UpdateFrequency::PerFrame)?;
-
         let scene_uniform = Buffer::new(
             engine.clone(),
             &BufferCreateInfo {
@@ -329,7 +417,29 @@ impl App {
             },
         )?;
 
-        let scene = load_glfw(engine.clone(), include_bytes!("assets/basicmesh.glb"))?;
+        let scene_dsl = {
+            let bindings = [DescriptorSetBinding {
+                typ: vk::DescriptorType::UNIFORM_BUFFER,
+                binding: 0,
+                stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            }];
+            DescriptorSetLayout::new(engine.clone(), &bindings)?
+        };
+
+        let scene_set = DescriptorSet::new(engine.clone(), scene_dsl, UpdateFrequency::PerFrame)?;
+        scene_set.write_buffer(&WriteBufferInfo {
+            binding: 0,
+            buffer: &scene_uniform,
+            size: size_of::<SceneData>() as u64,
+            offset: 0,
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+        });
+
+        let scene = load_glfw(
+            engine.clone(),
+            include_bytes!("assets/scene.gltf"),
+            &[("scene.bin", include_bytes!("assets/scene.bin") as &[u8])],
+        )?;
 
         Ok(App {
             window,
@@ -340,6 +450,7 @@ impl App {
             image_extent,
             draw_extent,
             scene_uniform,
+            scene_set,
             scene,
         })
     }
@@ -367,12 +478,12 @@ impl App {
     }
 
     fn update_camera(&self, frame_num: f32) -> glam::Mat4 {
-        let radius = 5.0; // Радиус вращения камеры вокруг модели
+        let radius = 500.0; // Радиус вращения камеры вокруг модели
         let angle = frame_num * 0.01; // Угол вращения (зависит от времени)
 
         let camera_position = glam::vec3(
             radius * angle.cos(), // X-координата
-            2.0,                  // Y-координата (высота камеры)
+            100.0,                // Y-координата (высота камеры)
             radius * angle.sin(), // Z-координата
         );
 
@@ -394,7 +505,7 @@ impl App {
 
         let view = self.update_camera(self.frame_num);
 
-        let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
+        let mut proj: glam::Mat4 = glam::Mat4::perspective_rh(
             70f32.to_radians(),
             self.draw_extent.width as f32 / self.draw_extent.height as f32,
             0.1,
@@ -421,33 +532,13 @@ impl App {
             self.scene_uniform.unmap();
         }
 
-        let scene_dsl = {
-            let bindings = [DescriptorSetBinding {
-                typ: vk::DescriptorType::UNIFORM_BUFFER,
-                binding: 0,
-                stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-            }];
-            DescriptorSetLayout::new(engine.clone(), &bindings).unwrap()
-        };
-
-        let sds =
-            DescriptorSet::new(self.engine.clone(), scene_dsl, UpdateFrequency::Static).unwrap();
-
-        sds.write_buffer(&WriteBufferInfo {
-            binding: 0,
-            buffer: &self.scene_uniform,
-            size: size_of::<SceneData>() as u64,
-            offset: 0,
-            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-        });
-
         cb.begin(engine).unwrap();
 
         cb.cmd_image_barrier(
             &engine,
             &ImageBarrier {
                 previous_accesses: &[AccessType::Nothing],
-                next_accesses: &[AccessType::FragmentShaderWrite],
+                next_accesses: &[AccessType::ColorAttachmentWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
                 next_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 image: &self.draw_texture,
@@ -459,7 +550,7 @@ impl App {
             &engine,
             &ImageBarrier {
                 previous_accesses: &[AccessType::Nothing],
-                next_accesses: &[AccessType::FragmentShaderWrite],
+                next_accesses: &[AccessType::DepthStencilAttachmentWrite],
                 previous_layout: vk::ImageLayout::UNDEFINED,
                 next_layout: vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
                 image: &self.depth_texture,
@@ -473,10 +564,21 @@ impl App {
                 color_attachments: &[RenderingAttachmentInfo {
                     image: &self.draw_texture,
                     layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    clear_value: vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.0, 0.0, 0.0, 1.0],
+                        },
+                    },
                 }],
                 depth_attachment: Some(&RenderingAttachmentInfo {
                     image: &self.depth_texture,
-                    layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    layout: vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
+                    clear_value: vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
+                    },
                 }),
                 extent: self.image_extent,
             },
@@ -485,7 +587,9 @@ impl App {
         cb.cmd_set_viewport(&engine, self.draw_extent);
         cb.cmd_set_scissor(&engine, self.draw_extent);
 
-        self.scene.objects[2].draw(&engine, cb, &sds);
+        for obj in &self.scene.objects {
+            obj.draw(&engine, cb, &self.scene_set);
+        }
 
         cb.cmd_end_rendering(&engine);
 

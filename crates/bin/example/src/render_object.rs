@@ -40,7 +40,7 @@ pub fn load_mesh(
     vertices: &[Vertex],
     indices: &[u32],
 ) -> anyhow::Result<Mesh> {
-    let vertex_buffer_size = (std::mem::size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
+    let vertex_buffer_size = (size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
 
     let vertex_buffer = Buffer::new(
         engine.clone(),

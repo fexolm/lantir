@@ -405,6 +405,7 @@ pub struct CopyBufferImageInfo<'i> {
 pub struct RenderingAttachmentInfo<'i> {
     pub image: &'i dyn Image,
     pub layout: vk::ImageLayout,
+    pub clear_value: vk::ClearValue,
 }
 
 impl RenderingAttachmentInfo<'_> {
@@ -414,6 +415,7 @@ impl RenderingAttachmentInfo<'_> {
             .image_layout(self.layout)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(self.clear_value)
     }
 }
 

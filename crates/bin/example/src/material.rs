@@ -111,7 +111,7 @@ impl MetallicRoughnessMat {
                 color_attachment_format: vk::Format::R8G8B8A8_UNORM,
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: true,
-                depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
+                depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
                 blending_mode: BlendingMode::AlphaBlend,
             },
         )?;
