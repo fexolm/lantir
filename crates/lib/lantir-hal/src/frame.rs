@@ -44,7 +44,10 @@ impl RenderFrame {
     }
 
     pub(crate) fn cleanup_resources(&self, engine: &RenderEngine) {
-        let mut queue = self.deletion_queue.lock().unwrap();
+        let mut queue = {
+            let mut queue = self.deletion_queue.lock().unwrap();
+            queue.drain(..).collect::<Vec<_>>()
+        };
 
         for mut resource in queue.drain(..) {
             resource.destroy(engine);

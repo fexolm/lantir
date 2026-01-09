@@ -147,7 +147,7 @@ impl GraphicsPipeline {
 pub struct GraphicsPipelineData {
     pub(crate) pipeline: vk::Pipeline,
 
-    layout: Arc<PipelineLayout>,
+    pub layout: Arc<PipelineLayout>,
     shaders: [Arc<Shader>; 2],
 }
 

@@ -120,14 +120,16 @@ impl RenderEngine {
     }
 
     pub fn begin_frame(&self) -> anyhow::Result<&RenderFrame> {
-        let mut current_frame = self
-            .current_frame
-            .lock()
-            .map_err(|e| anyhow!(e.to_string()))?;
+        let frame = {
+            let mut current_frame = self
+                .current_frame
+                .lock()
+                .map_err(|e| anyhow!(e.to_string()))?;
 
-        *current_frame = (*current_frame + 1) % self.frames.len();
+            *current_frame = (*current_frame + 1) % self.frames.len();
 
-        let frame = &self.frames[*current_frame];
+            &self.frames[*current_frame]
+        };
 
         unsafe {
             self.device.wait_for_fences(

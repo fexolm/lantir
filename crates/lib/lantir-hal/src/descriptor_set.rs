@@ -1,6 +1,6 @@
 ﻿use crate::image::Sampler;
 use crate::resource::{DeferDrop, Resource};
-use crate::{Buffer, Image, RenderEngine, buffer};
+use crate::{Buffer, Image, RenderEngine, UpdateFrequency};
 use ash::vk;
 use std::sync::Arc;
 
@@ -43,13 +43,14 @@ impl DescriptorSet {
     pub fn new(
         engine: Arc<RenderEngine>,
         layout: Arc<DescriptorSetLayout>,
+        update_frequency: UpdateFrequency,
     ) -> anyhow::Result<Self> {
-        let data = DescriptorSetData::new(&engine, layout)?;
+        let data = DescriptorSetData::new(&engine, layout, update_frequency)?;
         Ok(Resource::make(engine, data))
     }
 
     pub(crate) fn get(&self) -> vk::DescriptorSet {
-        self.descriptor_sets[self.engine.get_current_frame_index()]
+        self.get_handle().get(self.engine.get_current_frame_index())
     }
 
     pub fn write_image(&self, image_info: &WriteImageInfo) {
@@ -63,16 +64,18 @@ impl DescriptorSet {
 
         let img_infos = [img_info];
 
-        let descriptor_write = vk::WriteDescriptorSet::default()
-            .dst_set(self.get())
-            .dst_binding(image_info.binding)
-            .descriptor_type(image_info.descriptor_type)
-            .image_info(&img_infos);
+        for &dst_set in &self.descriptor_sets {
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(dst_set)
+                .dst_binding(image_info.binding)
+                .descriptor_type(image_info.descriptor_type)
+                .image_info(&img_infos);
 
-        unsafe {
-            self.engine
-                .device
-                .update_descriptor_sets(&[descriptor_write], &[]);
+            unsafe {
+                self.engine
+                    .device
+                    .update_descriptor_sets(&[descriptor_write], &[]);
+            }
         }
     }
 
@@ -82,16 +85,18 @@ impl DescriptorSet {
             .offset(buffer_info.offset)
             .range(buffer_info.size)];
 
-        let descriptor_write = vk::WriteDescriptorSet::default()
-            .dst_set(self.get())
-            .dst_binding(buffer_info.binding)
-            .descriptor_type(buffer_info.descriptor_type)
-            .buffer_info(&buffer_infos);
+        for &dst_set in &self.descriptor_sets {
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(dst_set)
+                .dst_binding(buffer_info.binding)
+                .descriptor_type(buffer_info.descriptor_type)
+                .buffer_info(&buffer_infos);
 
-        unsafe {
-            self.engine
-                .device
-                .update_descriptor_sets(&[descriptor_write], &[]);
+            unsafe {
+                self.engine
+                    .device
+                    .update_descriptor_sets(&[descriptor_write], &[]);
+            }
         }
     }
 }
@@ -142,15 +147,21 @@ impl DeferDrop for DescriptorSetLayoutData {
 
 pub struct DescriptorSetData {
     descriptor_sets: Vec<vk::DescriptorSet>,
-
-    layout: Arc<DescriptorSetLayout>,
+    pub layout: Arc<DescriptorSetLayout>,
 }
 
 impl DescriptorSetData {
-    pub fn new(engine: &RenderEngine, layout: Arc<DescriptorSetLayout>) -> anyhow::Result<Self> {
-        let layouts = (0..engine.frames.len())
-            .map(|_| layout.layout)
-            .collect::<Vec<_>>();
+    pub fn new(
+        engine: &RenderEngine,
+        layout: Arc<DescriptorSetLayout>,
+        update_frequency: UpdateFrequency,
+    ) -> anyhow::Result<Self> {
+        let frames_count = match update_frequency {
+            UpdateFrequency::Static => 1,
+            UpdateFrequency::PerFrame => engine.frames.len() as u32,
+        };
+
+        let layouts = (0..frames_count).map(|_| layout.layout).collect::<Vec<_>>();
 
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(engine.descriptor_pool)
@@ -162,6 +173,14 @@ impl DescriptorSetData {
             descriptor_sets,
             layout,
         })
+    }
+
+    fn get(&self, frame: usize) -> vk::DescriptorSet {
+        if self.descriptor_sets.len() == 1 {
+            self.descriptor_sets[0]
+        } else {
+            self.descriptor_sets[frame]
+        }
     }
 }
 

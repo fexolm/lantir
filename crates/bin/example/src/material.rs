@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
 use lantir_hal::{
-    vk, BlendingMode, Buffer, DescriptorSet, DescriptorSetBinding,
-    DescriptorSetLayout, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout, RenderEngine, Sampler,
-    Shader, Texture, WriteBufferInfo, WriteImageInfo,
+    BlendingMode, Buffer, CommandBuffer, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout,
+    GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout, RenderEngine, Sampler, Shader,
+    Texture, UpdateFrequency, WriteBufferInfo, WriteImageInfo, vk,
 };
 use shaderc::ShaderKind;
+use std::sync::Arc;
 
 pub struct MetallicRoughnessMat {
     pipeline: GraphicsPipeline,
@@ -20,16 +19,27 @@ pub struct MetallicRoughnessMatInstance {
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct GPUDrawPushConstants {
-    world_matrix: glam::Mat4,
-    vert_address: u64,
+    pub render_matrix: glam::Mat4,
+    pub vert_address: u64,
 }
 
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct MaterialConstants {
-    color_factors: glam::Vec4,
-    metal_rough_factors: glam::Vec4,
-    extra: [glam::Vec4; 14],
+    pub color_factors: glam::Vec4,
+    pub metal_rough_factors: glam::Vec4,
+    pub extra: [glam::Vec4; 14],
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct SceneData {
+    pub view: glam::Mat4,
+    pub proj: glam::Mat4,
+    pub viewproj: glam::Mat4,
+    pub ambient_color: glam::Vec4,
+    pub sunlignt_direction: glam::Vec4,
+    pub sunlight_color: glam::Vec4,
 }
 
 impl MetallicRoughnessMat {
@@ -48,7 +58,7 @@ impl MetallicRoughnessMat {
         )?;
 
         let push_constants = [vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX,
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
             size: std::mem::size_of::<GPUDrawPushConstants>() as u32,
         }];
@@ -84,7 +94,7 @@ impl MetallicRoughnessMat {
 
         let pipeline_layout = PipelineLayout::new(
             engine.clone(),
-            vec![scene_dsl, descriptor_set_layout.clone()],
+            vec![scene_dsl.clone(), descriptor_set_layout.clone()],
             &push_constants,
         )?;
 
@@ -98,7 +108,7 @@ impl MetallicRoughnessMat {
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,
                 front_face: vk::FrontFace::CLOCKWISE,
-                color_attachment_format: vk::Format::R8G8B8A8_SNORM,
+                color_attachment_format: vk::Format::R8G8B8A8_UNORM,
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: true,
                 depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
@@ -116,7 +126,11 @@ impl MetallicRoughnessMat {
         self: &Arc<Self>,
         engine: Arc<RenderEngine>,
     ) -> anyhow::Result<MetallicRoughnessMatInstance> {
-        let descriptor_set = DescriptorSet::new(engine, self.descriptor_set_layout.clone())?;
+        let descriptor_set = DescriptorSet::new(
+            engine,
+            self.descriptor_set_layout.clone(),
+            UpdateFrequency::Static,
+        )?;
 
         Ok(MetallicRoughnessMatInstance {
             mat: self.clone(),
@@ -155,6 +169,32 @@ impl MetallicRoughnessMatInstance {
             sampler: Some(sampler),
         });
     }
+
+    pub fn push_constants(
+        &self,
+        engine: &RenderEngine,
+        constants: &GPUDrawPushConstants,
+        cb: &CommandBuffer,
+    ) {
+        cb.cmd_push_constants(
+            &engine,
+            &self.mat.pipeline.layout,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            0,
+            constants,
+        );
+    }
+
+    pub fn bind(&self, engine: &RenderEngine, cb: &CommandBuffer, scene_set: &DescriptorSet) {
+        cb.cmd_bind_graphics_pipeline(engine, &self.mat.pipeline);
+        cb.cmd_bind_descriptor_sets(
+            engine,
+            &self.mat.pipeline.layout,
+            &[scene_set, &self.descriptor_set],
+            vk::PipelineBindPoint::GRAPHICS,
+            0,
+        );
+    }
 }
 
 fn load_shader(
@@ -170,8 +210,7 @@ fn load_shader(
         shaderc::EnvVersion::Vulkan1_3 as u32,
     );
     options.set_target_spirv(shaderc::SpirvVersion::V1_5);
-
-    options.set_optimization_level(shaderc::OptimizationLevel::Performance);
+    options.set_generate_debug_info();
 
     let binary_result =
         compiler.compile_into_spirv(source, shader_kind, name, "main", Some(&options))?;

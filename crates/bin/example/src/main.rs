@@ -1,14 +1,15 @@
 ﻿mod material;
 mod render_object;
 
-use crate::material::MetallicRoughnessMat;
-use crate::render_object::{load_mesh, RenderObject, Vertex};
+use crate::material::{MaterialConstants, MetallicRoughnessMat, SceneData};
+use crate::render_object::{RenderObject, Vertex, load_mesh};
 use gltf::Gltf;
 use lantir_hal::vk::ImageType;
 use lantir_hal::{
-    vk, AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo,
-    CopyBufferImageInfo, CopyImageInfo, ImageBarrier, RenderEngine, RenderEngineConfig,
-    RenderingAttachmentInfo, RenderingInfo, Texture, TextureCreateInfo, UpdateFrequency,
+    AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo, CopyBufferImageInfo,
+    CopyImageInfo, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, ImageBarrier,
+    RenderEngine, RenderEngineConfig, RenderingAttachmentInfo, RenderingInfo, Sampler, SamplerInfo,
+    Texture, TextureCreateInfo, UpdateFrequency, WriteBufferInfo, vk,
 };
 use std::sync::Arc;
 use winit::event::{Event, WindowEvent};
@@ -24,9 +25,10 @@ struct App {
     frame_num: f32,
     draw_texture: Texture,
     depth_texture: Texture,
-    objects: Vec<RenderObject>,
     image_extent: vk::Extent2D,
     draw_extent: vk::Extent2D,
+    scene_uniform: Buffer,
+    scene: Scene,
 }
 
 fn load_texture(
@@ -62,7 +64,7 @@ fn load_texture(
             update_frequency: UpdateFrequency::Static,
             format,
             extent,
-            usage,
+            usage: usage | vk::ImageUsageFlags::TRANSFER_DST,
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels,
         },
@@ -108,15 +110,64 @@ fn load_texture(
     Ok(texture)
 }
 
-fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Vec<RenderObject>> {
-    let gltf = Gltf::from_slice(bytes)?;
+struct Scene {
+    textures: Vec<Texture>,
+    samplers: Vec<Sampler>,
+    objects: Vec<RenderObject>,
+    buffers: Vec<Buffer>,
+}
 
-    let mut objects: Vec<_> = Vec::new();
+fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Scene> {
+    let gltf = Gltf::from_slice(bytes)?;
 
     let mr_mat = MetallicRoughnessMat::new(engine.clone())?;
 
+    let mut textures = Vec::new();
+    let mut samplers = Vec::new();
+    let mut objects = Vec::new();
+    let mut buffers = Vec::new();
+
+    static WHITE_TEXTURE_DATA: [u8; 16] = [
+        255, 255, 255, 255, // Пиксель 1
+        255, 255, 255, 255, // Пиксель 2
+        255, 255, 255, 255, // Пиксель 3
+        255, 255, 255, 255, // Пиксель 4
+    ];
+
+    let white_texture = load_texture(
+        engine.clone(),
+        &WHITE_TEXTURE_DATA,
+        vk::Extent3D {
+            width: 2,
+            height: 2,
+            depth: 1,
+        },
+        vk::Format::R8G8B8A8_UNORM,
+        vk::ImageUsageFlags::SAMPLED,
+        1,
+    )?;
+
+    let sampler = Sampler::new(
+        engine.clone(),
+        &SamplerInfo {
+            filter: vk::Filter::LINEAR,
+        },
+    )?;
+
     for mesh in gltf.meshes() {
         for primitive in mesh.primitives() {
+            let constants_buf = Buffer::new(
+                engine.clone(),
+                &BufferCreateInfo {
+                    size: size_of::<MaterialConstants>() as u64,
+                    update_frequency: UpdateFrequency::PerFrame,
+                    memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
+                        | vk::MemoryPropertyFlags::HOST_COHERENT,
+                    vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
+                },
+            )?;
+
             let buffer_data = gltf.blob.as_deref();
             let reader = primitive.reader(|_buffer| buffer_data);
 
@@ -156,15 +207,45 @@ fn load_glfw(engine: Arc<RenderEngine>, bytes: &[u8]) -> anyhow::Result<Vec<Rend
             let mesh = load_mesh(engine.clone(), &vertices, &indices)?;
             let material = mr_mat.new_instance(engine.clone())?;
 
+            let constants = MaterialConstants {
+                color_factors: Default::default(),
+                metal_rough_factors: Default::default(),
+                extra: [Default::default(); 14],
+            };
+
+            unsafe {
+                let data = constants_buf.map()?;
+                std::ptr::copy_nonoverlapping(
+                    (&constants) as *const MaterialConstants as *const u8,
+                    data,
+                    size_of::<SceneData>(),
+                );
+                constants_buf.unmap();
+            }
+
+            material.set_material_constants(&constants_buf, 0);
+            material.set_color_image(&white_texture, &sampler);
+            material.set_metal_rough_image(&white_texture, &sampler);
+
+            buffers.push(constants_buf);
+
             objects.push(RenderObject {
                 mesh,
                 material,
-                transform: Default::default(),
+                transform: glam::Mat4::from_scale(glam::vec3(0.5, 0.5, 0.5)),
             });
         }
     }
 
-    Ok(objects)
+    textures.push(white_texture);
+    samplers.push(sampler);
+
+    Ok(Scene {
+        textures,
+        objects,
+        buffers,
+        samplers,
+    })
 }
 
 impl App {
@@ -223,7 +304,31 @@ impl App {
             },
         )?;
 
-        let objects = load_glfw(engine.clone(), include_bytes!("assets/basicmesh.glb"))?;
+        let scene_dsl = {
+            let bindings = [DescriptorSetBinding {
+                typ: vk::DescriptorType::UNIFORM_BUFFER,
+                binding: 0,
+                stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            }];
+            DescriptorSetLayout::new(engine.clone(), &bindings).unwrap()
+        };
+
+        let scene_descriptor_set =
+            DescriptorSet::new(engine.clone(), scene_dsl.clone(), UpdateFrequency::PerFrame)?;
+
+        let scene_uniform = Buffer::new(
+            engine.clone(),
+            &BufferCreateInfo {
+                size: size_of::<SceneData>() as u64,
+                update_frequency: UpdateFrequency::PerFrame,
+                memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
+            },
+        )?;
+
+        let scene = load_glfw(engine.clone(), include_bytes!("assets/basicmesh.glb"))?;
 
         Ok(App {
             window,
@@ -233,7 +338,8 @@ impl App {
             frame_num: 0f32,
             image_extent,
             draw_extent,
-            objects,
+            scene_uniform,
+            scene,
         })
     }
 
@@ -285,7 +391,56 @@ impl App {
 
         let cb = frame.get_render_command_buffer();
 
-        cb.begin(engine);
+        let view = glam::Mat4::IDENTITY;
+
+        let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
+            70f32.to_radians(),
+            self.draw_extent.width as f32 / self.draw_extent.height as f32,
+            0.1,
+            10000.0,
+        );
+        proj.w_axis.y *= -1.0;
+
+        let scene_data = SceneData {
+            view,
+            proj,
+            viewproj: proj * view,
+            ambient_color: glam::vec4(0.5, 0.5, 0.5, 1.0),
+            sunlignt_direction: glam::vec4(1.0, 1.0, 1.0, 0.0).normalize(),
+            sunlight_color: glam::vec4(1.0, 1.0, 1.0, 1.0),
+        };
+
+        unsafe {
+            let data = self.scene_uniform.map().unwrap();
+            std::ptr::copy_nonoverlapping(
+                (&scene_data) as *const SceneData as *const u8,
+                data,
+                size_of::<SceneData>(),
+            );
+            self.scene_uniform.unmap();
+        }
+
+        let scene_dsl = {
+            let bindings = [DescriptorSetBinding {
+                typ: vk::DescriptorType::UNIFORM_BUFFER,
+                binding: 0,
+                stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            }];
+            DescriptorSetLayout::new(engine.clone(), &bindings).unwrap()
+        };
+
+        let sds =
+            DescriptorSet::new(self.engine.clone(), scene_dsl, UpdateFrequency::Static).unwrap();
+
+        sds.write_buffer(&WriteBufferInfo {
+            binding: 0,
+            buffer: &self.scene_uniform,
+            size: size_of::<SceneData>() as u64,
+            offset: 0,
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+        });
+
+        cb.begin(engine).unwrap();
 
         cb.cmd_image_barrier(
             &engine,
@@ -311,8 +466,6 @@ impl App {
             },
         );
 
-        // cb.cmd_bind_descriptor_set(&engine, &self.pipeline_layout, &self.descriptor_set);
-
         cb.cmd_begin_rendering(
             &engine,
             &RenderingInfo {
@@ -328,39 +481,10 @@ impl App {
             },
         );
 
-        // cb.cmd_bind_graphics_pipeline(&engine, &self.pipeline);
+        cb.cmd_set_viewport(&engine, self.draw_extent);
+        cb.cmd_set_scissor(&engine, self.draw_extent);
 
-        // cb.cmd_set_viewport(&engine, self.draw_extent);
-        // cb.cmd_set_scissor(&engine, self.draw_extent);
-
-        // // let view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, -5.0));
-
-        // let view = self.update_camera(self.frame_num);
-
-        // let mut proj: glam::Mat4 = glam::Mat4::perspective_rh_gl(
-        //     70f32.to_radians(),
-        //     self.draw_extent.width as f32 / self.draw_extent.height as f32,
-        //     0.1,
-        //     10000.0,
-        // );
-        // proj.w_axis.y *= -1.0;
-
-        // let push_constants = GPUDrawPushConstants {
-        //     world_matrix: proj * view,
-        //     vert_address: self.mesh.vertex_buffer.get_device_address(),
-        // };
-
-        // cb.cmd_push_constants(
-        //     &engine,
-        //     &self.pipeline_layout,
-        //     vk::ShaderStageFlags::VERTEX,
-        //     0,
-        //     &push_constants,
-        // );
-
-        // cb.cmd_bind_index_buffer(&engine, &self.mesh.index_buffer, vk::IndexType::UINT32);
-
-        // cb.cmd_draw_indexed(&engine, self.mesh.index_count, 1);
+        self.scene.objects.first().unwrap().draw(&engine, cb, &sds);
 
         cb.cmd_end_rendering(&engine);
 
@@ -419,7 +543,7 @@ impl App {
 
         cb.cmd_image_barrier(&engine, &image_barrier);
 
-        cb.end(engine);
+        cb.end(engine).unwrap();
 
         engine.submit_and_present(frame, &swapchain_image).unwrap();
     }

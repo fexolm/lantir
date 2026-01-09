@@ -1,6 +1,6 @@
 ﻿use ash::ext::debug_utils;
 use ash::vk::DebugUtilsMessengerEXT;
-use ash::{vk, Entry};
+use ash::{Entry, vk};
 use std::borrow::Cow;
 use std::ffi;
 use std::ffi::c_char;
@@ -31,11 +31,17 @@ impl Instance {
             let enabled_layers = get_enabled_layers();
             let enabled_extensions = get_enabled_extensions(&window, debug)?;
 
+            let enabled_validation_features = [vk::ValidationFeatureEnableEXT::DEBUG_PRINTF];
+
+            let mut validation_features = vk::ValidationFeaturesEXT::default()
+                .enabled_validation_features(&enabled_validation_features);
+
             let create_info = vk::InstanceCreateInfo::default()
                 .application_info(&app_info)
                 .enabled_layer_names(&enabled_layers)
                 .enabled_extension_names(&enabled_extensions)
-                .flags(create_flags);
+                .flags(create_flags)
+                .push_next(&mut validation_features);
 
             entry.create_instance(&create_info, None)?
         };
@@ -103,11 +109,9 @@ unsafe extern "system" fn vulkan_debug_callback(
         ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
     };
 
-    if message_severity >= vk::DebugUtilsMessageSeverityFlagsEXT::WARNING {
-        println!(
-            "{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
-        );
-    }
+    println!(
+        "{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
+    );
 
     vk::FALSE
 }

@@ -5,7 +5,6 @@ use ash::khr::swapchain;
 use ash::vk;
 use std::ffi::{CStr, c_void};
 use std::ops::Deref;
-use std::sync::Mutex;
 
 pub(crate) struct Device {
     device: ash::Device,
@@ -24,7 +23,10 @@ impl Device {
         } = select_physical_device(&instance, &surface)?;
 
         let device = {
-            let device_extension_names_raw = [swapchain::NAME.as_ptr()];
+            let device_extension_names_raw = [
+                swapchain::NAME.as_ptr(),
+                vk::KHR_SHADER_NON_SEMANTIC_INFO_NAME.as_ptr(),
+            ];
 
             let features = vk::PhysicalDeviceFeatures {
                 shader_clip_distance: 1,

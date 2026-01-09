@@ -1,5 +1,5 @@
-﻿use crate::RenderEngine;
-use crate::resource::{DeferDrop, Resource};
+﻿use crate::resource::{DeferDrop, Resource};
+use crate::RenderEngine;
 use ash::vk;
 use std::sync::Arc;
 use vk_mem::{Alloc, Allocation, AllocationCreateInfo, MemoryUsage};
@@ -181,7 +181,7 @@ pub struct SamplerData {
 }
 
 pub struct SamplerInfo {
-    filter: vk::Filter,
+    pub filter: vk::Filter,
 }
 
 impl SamplerData {

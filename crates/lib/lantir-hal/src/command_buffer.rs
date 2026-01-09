@@ -177,19 +177,23 @@ impl CommandBuffer {
         }
     }
 
-    pub fn cmd_bind_descriptor_set(
+    pub fn cmd_bind_descriptor_sets(
         &self,
         engine: &RenderEngine,
         pipeline_layout: &PipelineLayout,
-        descriptor_set: &DescriptorSet,
+        descriptor_sets: &[&DescriptorSet],
+        bind_point: vk::PipelineBindPoint,
+        first_set: u32,
     ) {
         unsafe {
+            let sets = descriptor_sets.iter().map(|s| s.get()).collect::<Vec<_>>();
+
             engine.device.cmd_bind_descriptor_sets(
                 self.command_buffer,
-                vk::PipelineBindPoint::COMPUTE,
+                bind_point,
                 pipeline_layout.layout,
-                0,
-                &[descriptor_set.get()],
+                first_set,
+                &sets,
                 &[],
             )
         };
