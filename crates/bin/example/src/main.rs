@@ -312,7 +312,7 @@ fn load_glfw(
             height: 2,
             depth: 1,
         },
-        vk::Format::R8G8B8A8_UNORM,
+        vk::Format::B8G8R8A8_UNORM,
         vk::ImageUsageFlags::SAMPLED,
         1,
     )?;
@@ -535,7 +535,7 @@ impl App {
             &TextureCreateInfo {
                 image_type: vk::ImageType::TYPE_2D,
                 update_frequency: UpdateFrequency::PerFrame,
-                format: vk::Format::R8G8B8A8_UNORM,
+                format: vk::Format::B8G8R8A8_UNORM,
                 extent: vk::Extent3D {
                     width: image_extent.width,
                     height: image_extent.height,

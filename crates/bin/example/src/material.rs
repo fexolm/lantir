@@ -108,7 +108,7 @@ impl MetallicRoughnessMat {
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,
                 front_face: vk::FrontFace::CLOCKWISE,
-                color_attachment_format: vk::Format::R8G8B8A8_UNORM,
+                color_attachment_format: vk::Format::B8G8R8A8_UNORM,
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: true,
                 depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
