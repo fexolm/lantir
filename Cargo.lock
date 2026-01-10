@@ -701,6 +701,8 @@ dependencies = [
  "anyhow",
  "glam",
  "lantir-hal",
+ "parking_lot",
+ "shaderc",
 ]
 
 [[package]]

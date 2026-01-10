@@ -7,6 +7,7 @@ use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
 use anyhow::anyhow;
 use ash::vk;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use vk_mem::{Allocator, AllocatorCreateInfo};
 use winit::window::Window;
@@ -23,6 +24,8 @@ pub struct RenderEngine {
     pub(crate) instance: Instance,
 
     immediate_command_buffer: Mutex<CommandBuffer>,
+
+    is_started: AtomicBool,
 }
 
 pub struct RenderEngineConfig {
@@ -96,8 +99,13 @@ impl RenderEngine {
                 allocator,
                 current_frame: Mutex::new(0),
                 immediate_command_buffer,
+                is_started: AtomicBool::new(false),
             }))
         }
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.is_started.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn recreate_swapchain(&self) -> anyhow::Result<()> {
@@ -119,6 +127,9 @@ impl RenderEngine {
     }
 
     pub fn begin_frame(&self) -> anyhow::Result<&RenderFrame> {
+        self.is_started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         let frame = {
             let mut current_frame = self
                 .current_frame

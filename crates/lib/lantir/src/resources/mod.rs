@@ -9,6 +9,8 @@ pub const INVALID_RESOURCE_HANDLE: u64 = u64::MAX;
 pub const MAX_TEXTURES: usize = 1024;
 pub const MAX_MESHES: usize = 4096;
 pub const MAX_MATERIALS: usize = 4096;
+pub const MAX_DRAW_ITEMS: usize = 16384;
+pub const MAX_INDIRECT_DRAWS: usize = MAX_DRAW_ITEMS * 8;
 pub const MAX_VERTICES: usize = 16_000_000;
 pub const MAX_INDICES: usize = 32_000_000;
 
@@ -16,6 +18,7 @@ pub const META_BUFFER_BINDING_VERTEX: u32 = 0;
 pub const META_BUFFER_BINDING_MESH: u32 = 1;
 pub const META_BUFFER_BINDING_MATERIAL: u32 = 2;
 pub const META_BUFFER_BINDING_TEXTURE: u32 = 3;
+pub const META_BUFFER_BINDING_DRAW_ITEMS: u32 = 4;
 
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -42,10 +45,18 @@ pub struct PbrMaterial {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct DrawItem {
+    pub transform: glam::Mat4,
+    pub mesh: MeshHandle,
+    pub material: MaterialHandle,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct GpuMesh {
     pub vertex_offset: u64,
     pub index_offset: u64,
-    pub material: MaterialHandle,
+    pub index_count: u32,
 }
 
 pub struct TriMesh {

@@ -216,7 +216,7 @@ impl CommandBuffer {
         }
     }
 
-    pub fn cmd_push_constants<T: Sized>(
+    pub fn cmd_push_constants<T: Sized + 'static>(
         &self,
         engine: &RenderEngine,
         layout: &PipelineLayout,
@@ -300,6 +300,44 @@ impl CommandBuffer {
             engine
                 .device
                 .cmd_draw(self.command_buffer, vertex_count, instance_count, 0, 0);
+        }
+    }
+
+    pub fn cmd_draw_indirect(
+        &self,
+        engine: &RenderEngine,
+        buffer: &Buffer,
+        offset: u64,
+        draw_count: u32,
+        stride: u32,
+    ) {
+        unsafe {
+            engine.device.cmd_draw_indirect(
+                self.command_buffer,
+                buffer.get_buffer(),
+                offset,
+                draw_count,
+                stride,
+            );
+        }
+    }
+
+    pub fn cmd_draw_indexed_indirect(
+        &self,
+        engine: &RenderEngine,
+        buffer: &Buffer,
+        offset: u64,
+        draw_count: u32,
+        stride: u32,
+    ) {
+        unsafe {
+            engine.device.cmd_draw_indexed_indirect(
+                self.command_buffer,
+                buffer.get_buffer(),
+                offset,
+                draw_count,
+                stride,
+            );
         }
     }
 

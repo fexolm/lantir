@@ -1,5 +1,5 @@
-﻿use crate::resource::{DeferDrop, Resource};
-use crate::RenderEngine;
+﻿use crate::RenderEngine;
+use crate::resource::{DeferDrop, Resource};
 use ash::vk;
 use std::sync::Arc;
 use vk_mem::{Alloc, Allocation, AllocationCreateInfo, MemoryUsage};
@@ -9,6 +9,7 @@ pub trait Image {
     fn get_image_view(&self) -> vk::ImageView;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateFrequency {
     Static,
     PerFrame,

@@ -45,9 +45,8 @@ impl DescriptorSet {
     pub fn new(
         engine: Arc<RenderEngine>,
         layout: Arc<DescriptorSetLayout>,
-        update_frequency: UpdateFrequency,
     ) -> anyhow::Result<Self> {
-        let data = DescriptorSetData::new(&engine, layout, update_frequency)?;
+        let data = DescriptorSetData::new(&engine, layout)?;
         Ok(Resource::make(engine, data))
     }
 
@@ -56,6 +55,10 @@ impl DescriptorSet {
     }
 
     pub fn write_image(&self, image_info: &WriteImageInfo) {
+        assert!(
+            !self.engine.is_started(),
+            "Cannot write to descriptor sets after rendering has started"
+        );
         let mut img_info = vk::DescriptorImageInfo::default()
             .image_view(image_info.image.get_image_view())
             .image_layout(image_info.layout);
@@ -83,6 +86,11 @@ impl DescriptorSet {
     }
 
     pub fn write_buffer(&self, buffer_info: &WriteBufferInfo) {
+        assert!(
+            !self.engine.is_started(),
+            "Cannot write to descriptor sets after rendering has started"
+        );
+
         for (frame_index, &dst_set) in self.descriptor_sets.iter().enumerate() {
             let buffer_infos = [vk::DescriptorBufferInfo::default()
                 .buffer(buffer_info.buffer.get_handle().get_buffer(frame_index))
@@ -154,17 +162,10 @@ pub struct DescriptorSetData {
 }
 
 impl DescriptorSetData {
-    pub fn new(
-        engine: &RenderEngine,
-        layout: Arc<DescriptorSetLayout>,
-        update_frequency: UpdateFrequency,
-    ) -> anyhow::Result<Self> {
-        let frames_count = match update_frequency {
-            UpdateFrequency::Static => 1,
-            UpdateFrequency::PerFrame => engine.frames.len() as u32,
-        };
-
-        let layouts = (0..frames_count).map(|_| layout.layout).collect::<Vec<_>>();
+    pub fn new(engine: &RenderEngine, layout: Arc<DescriptorSetLayout>) -> anyhow::Result<Self> {
+        let layouts = (0..engine.frames.len())
+            .map(|_| layout.layout)
+            .collect::<Vec<_>>();
 
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(engine.descriptor_pool)
@@ -179,11 +180,7 @@ impl DescriptorSetData {
     }
 
     fn get(&self, frame: usize) -> vk::DescriptorSet {
-        if self.descriptor_sets.len() == 1 {
-            self.descriptor_sets[0]
-        } else {
-            self.descriptor_sets[frame]
-        }
+        self.descriptor_sets[frame]
     }
 }
 

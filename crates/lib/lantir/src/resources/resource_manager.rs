@@ -1,23 +1,19 @@
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-};
+use std::{marker::PhantomData, sync::Arc};
+
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
 use lantir_hal::{
     AllocationCreateFlags, Buffer, DescriptorSet, DescriptorSetLayout, RenderEngine, Texture,
     UpdateFrequency, vk,
 };
 
-use crate::resources::{
-    GpuMesh, MAX_INDICES, MAX_MATERIALS, MAX_MESHES, MAX_TEXTURES, MAX_VERTICES,
-    META_BUFFER_BINDING_MATERIAL, META_BUFFER_BINDING_MESH, META_BUFFER_BINDING_TEXTURE,
-    META_BUFFER_BINDING_VERTEX, MaterialHandle, MeshHandle, PbrMaterial, TextureHandle, TriMesh,
-    Vertex,
-};
+use crate::resources::*;
 
 pub struct ResourceManager {
     vertex_buffer: Mutex<GpuBuffer<Vertex>>,
     index_buffer: Mutex<GpuBuffer<u32>>,
+    items_buffer: Mutex<GpuBuffer<DrawItem>>,
+    global_indirect_buffer: Mutex<GpuBuffer<vk::DrawIndexedIndirectCommand>>,
 
     mesh_buffer: Mutex<MirroredBuffer<GpuMesh>>,
     material_buffer: Mutex<MirroredBuffer<PbrMaterial>>,
@@ -32,8 +28,17 @@ impl ResourceManager {
     pub fn new(engine: Arc<RenderEngine>) -> anyhow::Result<Self> {
         // Build buffers first (without Mutex) so we can initialize descriptor sets
         // without locking during construction.
-        let vertex_buffer = GpuBuffer::new(engine.clone(), MAX_VERTICES)?;
-        let index_buffer = GpuBuffer::new(engine.clone(), MAX_INDICES)?;
+        let vertex_buffer = GpuBuffer::new(engine.clone(), MAX_VERTICES, UpdateFrequency::Static)?;
+        let index_buffer = GpuBuffer::new(engine.clone(), MAX_INDICES, UpdateFrequency::Static)?;
+        let items_buffer =
+            GpuBuffer::new(engine.clone(), MAX_DRAW_ITEMS, UpdateFrequency::PerFrame)?;
+        let global_indirect_buffer = GpuBuffer::new_with_usage(
+            engine.clone(),
+            MAX_INDIRECT_DRAWS,
+            UpdateFrequency::PerFrame,
+            vk::BufferUsageFlags::INDIRECT_BUFFER,
+        )?;
+
         let mesh_buffer = MirroredBuffer::new(engine.clone(), MAX_MESHES)?;
         let material_buffer = MirroredBuffer::new(engine.clone(), MAX_MATERIALS)?;
 
@@ -68,14 +73,18 @@ impl ResourceManager {
                     stage: vk::ShaderStageFlags::ALL,
                     count: MAX_TEXTURES as u32,
                 },
+                // draw items
+                lantir_hal::DescriptorSetBinding {
+                    typ: vk::DescriptorType::STORAGE_BUFFER,
+                    binding: META_BUFFER_BINDING_DRAW_ITEMS,
+                    stage: vk::ShaderStageFlags::ALL,
+                    count: 1,
+                },
             ],
         )?;
 
-        let meta_descriptor_set = DescriptorSet::new(
-            engine.clone(),
-            meta_descritor_set_layout.clone(),
-            UpdateFrequency::Static,
-        )?;
+        let meta_descriptor_set =
+            DescriptorSet::new(engine.clone(), meta_descritor_set_layout.clone())?;
 
         // Bind meta buffers once (static descriptor set). Without this, shaders reading these
         // bindings will see uninitialized descriptors.
@@ -103,6 +112,14 @@ impl ResourceManager {
             descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
         });
 
+        meta_descriptor_set.write_buffer(&lantir_hal::WriteBufferInfo {
+            binding: META_BUFFER_BINDING_DRAW_ITEMS,
+            buffer: items_buffer.buffer(),
+            offset: 0,
+            size: items_buffer.capacity_bytes(),
+            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+        });
+
         Ok(ResourceManager {
             vertex_buffer: Mutex::new(vertex_buffer),
             index_buffer: Mutex::new(index_buffer),
@@ -111,14 +128,13 @@ impl ResourceManager {
             meta_descritor_set_layout,
             meta_descriptor_set,
             textures: Mutex::new(Vec::with_capacity(MAX_TEXTURES)),
+            items_buffer: Mutex::new(items_buffer),
+            global_indirect_buffer: Mutex::new(global_indirect_buffer),
         })
     }
 
     pub fn add_texture(&self, texture: Texture) -> anyhow::Result<TextureHandle> {
-        let mut textures = self
-            .textures
-            .lock()
-            .map_err(|_| anyhow::anyhow!("textures mutex poisoned"))?;
+        let mut textures = self.textures.lock();
 
         if textures.len() >= MAX_TEXTURES {
             anyhow::bail!("Exceeded maximum number of textures");
@@ -139,34 +155,25 @@ impl ResourceManager {
         Ok(handle)
     }
 
-    pub fn add_mesh(&self, mesh: &TriMesh, material: MaterialHandle) -> anyhow::Result<MeshHandle> {
+    pub fn add_mesh(&self, mesh: &TriMesh) -> anyhow::Result<MeshHandle> {
         let vertex_offset = {
-            let mut vb = self
-                .vertex_buffer
-                .lock()
-                .map_err(|_| anyhow::anyhow!("vertex_buffer mutex poisoned"))?;
+            let mut vb = self.vertex_buffer.lock();
             vb.add(&mesh.vertices)?
         };
 
         let index_offset = {
-            let mut ib = self
-                .index_buffer
-                .lock()
-                .map_err(|_| anyhow::anyhow!("index_buffer mutex poisoned"))?;
+            let mut ib = self.index_buffer.lock();
             ib.add(&mesh.indices)?
         };
 
         let mesh = GpuMesh {
-            index_offset,
             vertex_offset,
-            material,
+            index_offset,
+            index_count: mesh.indices.len() as u32,
         };
 
         let handle = {
-            let mut mb = self
-                .mesh_buffer
-                .lock()
-                .map_err(|_| anyhow::anyhow!("mesh_buffer mutex poisoned"))?;
+            let mut mb = self.mesh_buffer.lock();
             mb.add(mesh)?
         };
 
@@ -175,14 +182,21 @@ impl ResourceManager {
 
     pub fn add_material(&self, material: PbrMaterial) -> anyhow::Result<MaterialHandle> {
         let handle = {
-            let mut mb = self
-                .material_buffer
-                .lock()
-                .map_err(|_| anyhow::anyhow!("material_buffer mutex poisoned"))?;
+            let mut mb = self.material_buffer.lock();
             mb.add(material)?
         };
 
         Ok(handle)
+    }
+
+    pub fn get_mesh(&self, handle: MeshHandle) -> GpuMesh {
+        let mb = self.mesh_buffer.lock();
+        mb.get(handle as usize)
+    }
+
+    pub fn get_material(&self, handle: MaterialHandle) -> PbrMaterial {
+        let mb = self.material_buffer.lock();
+        mb.get(handle as usize)
     }
 
     pub fn get_meta_descriptor_set(&self) -> &DescriptorSet {
@@ -192,6 +206,42 @@ impl ResourceManager {
     pub fn get_meta_descriptor_set_layout(&self) -> &Arc<DescriptorSetLayout> {
         &self.meta_descritor_set_layout
     }
+
+    pub fn get_index_buffer(&self) -> MappedMutexGuard<Buffer> {
+        let ib = self.index_buffer.lock();
+        MutexGuard::map(ib, |ib: &mut GpuBuffer<u32>| &mut ib.buffer)
+    }
+
+    pub fn set_draw_items(&self, items: &[DrawItem]) -> anyhow::Result<()> {
+        let mut ib = self.items_buffer.lock();
+
+        ib.clear();
+        ib.add(items)?;
+        Ok(())
+    }
+
+    pub fn reset_global_indirect_buffer(&self) -> anyhow::Result<()> {
+        let mut db = self.global_indirect_buffer.lock();
+
+        db.clear();
+        Ok(())
+    }
+
+    pub fn get_global_indirect_buffer(&self) -> MappedMutexGuard<Buffer> {
+        let db = self.global_indirect_buffer.lock();
+
+        MutexGuard::map(db, |db: &mut GpuBuffer<vk::DrawIndexedIndirectCommand>| {
+            &mut db.buffer
+        })
+    }
+
+    pub fn add_indirect_draw_commands(
+        &self,
+        cmd: &[vk::DrawIndexedIndirectCommand],
+    ) -> anyhow::Result<u64> {
+        let mut db = self.global_indirect_buffer.lock();
+        db.add(cmd)
+    }
 }
 
 struct GpuBuffer<T: Sized> {
@@ -200,10 +250,29 @@ struct GpuBuffer<T: Sized> {
     max_elems: usize,
     marker: PhantomData<T>,
     engine: Arc<RenderEngine>,
+    update_frequency: UpdateFrequency,
 }
 
 impl<T> GpuBuffer<T> {
-    pub fn new(engine: Arc<RenderEngine>, num_elems: usize) -> anyhow::Result<Self> {
+    pub fn new(
+        engine: Arc<RenderEngine>,
+        num_elems: usize,
+        update_frequency: UpdateFrequency,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_usage(
+            engine,
+            num_elems,
+            update_frequency,
+            vk::BufferUsageFlags::empty(),
+        )
+    }
+
+    pub fn new_with_usage(
+        engine: Arc<RenderEngine>,
+        num_elems: usize,
+        update_frequency: UpdateFrequency,
+        extra_usage: vk::BufferUsageFlags,
+    ) -> anyhow::Result<Self> {
         let alloc_size = std::mem::size_of::<T>() * num_elems;
 
         let buffer = Buffer::new(
@@ -212,9 +281,10 @@ impl<T> GpuBuffer<T> {
                 size: alloc_size as u64,
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | extra_usage,
                 memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                update_frequency: UpdateFrequency::Static,
+                update_frequency: update_frequency,
                 vma_flags: AllocationCreateFlags::empty(),
             },
         )?;
@@ -225,6 +295,7 @@ impl<T> GpuBuffer<T> {
             max_elems: num_elems,
             marker: PhantomData,
             engine,
+            update_frequency,
         })
     }
 
@@ -279,9 +350,14 @@ impl<T> GpuBuffer<T> {
             );
         })?;
 
+        let res: u64 = self.num_elems;
         self.num_elems += data.len() as u64;
+        Ok(res)
+    }
 
-        Ok(offset)
+    pub fn clear(&mut self) {
+        assert_eq!(self.update_frequency, UpdateFrequency::PerFrame);
+        self.num_elems = 0;
     }
 }
 
@@ -292,7 +368,7 @@ struct MirroredBuffer<T: Sized + Copy> {
 
 impl<T: Sized + Copy> MirroredBuffer<T> {
     pub fn new(engine: Arc<RenderEngine>, num_elems: usize) -> anyhow::Result<Self> {
-        let buffer = GpuBuffer::new(engine, num_elems)?;
+        let buffer = GpuBuffer::new(engine, num_elems, UpdateFrequency::Static)?;
         let data = Vec::with_capacity(num_elems);
         Ok(MirroredBuffer { buffer, data })
     }
@@ -305,6 +381,14 @@ impl<T: Sized + Copy> MirroredBuffer<T> {
         self.buffer.add(&[val])?;
         self.data.push(val);
         Ok(id as u64)
+    }
+
+    pub fn get(&self, index: usize) -> T {
+        self.data[index]
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
     }
 
     pub fn buffer(&self) -> &Buffer {
