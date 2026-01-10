@@ -468,6 +468,7 @@ dependencies = [
  "egui",
  "glam",
  "gltf",
+ "lantir",
  "lantir-hal",
  "shaderc",
  "winit",

@@ -143,7 +143,7 @@ impl RenderPass for OpaquePass {
         cb.cmd_push_constants(
             &renderer.get_engine(),
             &self.pipeline.layout,
-            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            vk::ShaderStageFlags::VERTEX,
             0,
             &scene.camera,
         );

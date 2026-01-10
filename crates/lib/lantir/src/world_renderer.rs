@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use lantir_hal::{
     AccessType, CommandBuffer, CopyImageInfo, ImageBarrier, RenderEngine, Texture,
     TextureCreateInfo, UpdateFrequency, vk,
@@ -30,7 +31,7 @@ pub struct WorldRenderer {
 }
 
 impl WorldRenderer {
-    pub fn new(engine: Arc<RenderEngine>, config: WorldRendererConfig) -> anyhow::Result<Self> {
+    pub fn new(engine: Arc<RenderEngine>, config: &WorldRendererConfig) -> anyhow::Result<Self> {
         let resource_manager = Arc::new(ResourceManager::new(engine.clone())?);
 
         let draw_extent = config.draw_extent;
@@ -135,12 +136,15 @@ impl WorldRenderer {
     }
 
     pub fn draw_frame(&mut self, scene: &Scene) -> anyhow::Result<()> {
-        let frame = self.engine.begin_frame()?;
+        let frame = self.engine.begin_frame().context("engine.begin_frame")?;
 
-        let swapchain_image = self.engine.acquire_swapchain_image(&frame)?;
+        let swapchain_image = self
+            .engine
+            .acquire_swapchain_image(&frame)
+            .context("engine.acquire_swapchain_image")?;
 
         let cb = frame.get_render_command_buffer();
-        cb.begin(&self.engine)?;
+        cb.begin(&self.engine).context("command_buffer.begin")?;
 
         cb.cmd_set_viewport(&self.engine, self.draw_extent);
         cb.cmd_set_scissor(&self.engine, self.draw_extent);
@@ -169,8 +173,12 @@ impl WorldRenderer {
             },
         );
 
-        self.resource_manager.set_draw_items(scene.draw_items)?;
-        self.resource_manager.reset_global_indirect_buffer()?;
+        self.resource_manager
+            .set_draw_items(scene.draw_items)
+            .context("resource_manager.set_draw_items")?;
+        self.resource_manager
+            .reset_global_indirect_buffer()
+            .context("resource_manager.reset_global_indirect_buffer")?;
 
         cb.cmd_bind_index_buffer(
             &self.engine,
@@ -178,7 +186,7 @@ impl WorldRenderer {
             vk::IndexType::UINT32,
         );
 
-        self.run_passes(cb, scene)?;
+        self.run_passes(cb, scene).context("run_passes")?;
 
         cb.cmd_image_barrier(
             &self.engine,
@@ -236,7 +244,7 @@ impl WorldRenderer {
             },
         );
 
-        cb.end(&self.engine)?;
+        cb.end(&self.engine).context("command_buffer.end")?;
 
         self.engine
             .submit_and_present(frame, &swapchain_image)

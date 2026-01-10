@@ -3,8 +3,8 @@ use std::{marker::PhantomData, sync::Arc};
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
 use lantir_hal::{
-    AllocationCreateFlags, Buffer, DescriptorSet, DescriptorSetLayout, RenderEngine, Texture,
-    UpdateFrequency, vk,
+    AllocationCreateFlags, Buffer, DescriptorSet, DescriptorSetLayout, RenderEngine, Sampler,
+    SamplerInfo, Texture, UpdateFrequency, vk,
 };
 
 use crate::resources::*;
@@ -20,6 +20,8 @@ pub struct ResourceManager {
     meta_descritor_set_layout: Arc<lantir_hal::DescriptorSetLayout>,
     meta_descriptor_set: DescriptorSet,
 
+    default_sampler: Sampler,
+
     textures: Mutex<Vec<Texture>>,
 
     uploaded_meshes: Mutex<Vec<UploadedMesh>>,
@@ -27,6 +29,13 @@ pub struct ResourceManager {
 
 impl ResourceManager {
     pub fn new(engine: Arc<RenderEngine>) -> anyhow::Result<Self> {
+        let default_sampler = Sampler::new(
+            engine.clone(),
+            &SamplerInfo {
+                filter: vk::Filter::LINEAR,
+            },
+        )?;
+
         // Build buffers first (without Mutex) so we can initialize descriptor sets
         // without locking during construction.
         let vertex_buffer = GpuBuffer::new(engine.clone(), MAX_VERTICES, UpdateFrequency::Static)?;
@@ -66,7 +75,7 @@ impl ResourceManager {
                 },
                 // textures
                 lantir_hal::DescriptorSetBinding {
-                    typ: vk::DescriptorType::SAMPLED_IMAGE,
+                    typ: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                     binding: META_BUFFER_BINDING_TEXTURE,
                     stage: vk::ShaderStageFlags::ALL,
                     count: MAX_TEXTURES as u32,
@@ -118,6 +127,7 @@ impl ResourceManager {
             material_buffer: Mutex::new(material_buffer),
             meta_descritor_set_layout,
             meta_descriptor_set,
+            default_sampler,
             textures: Mutex::new(Vec::with_capacity(MAX_TEXTURES)),
             items_buffer: Mutex::new(items_buffer),
             global_indirect_buffer: Mutex::new(global_indirect_buffer),
@@ -140,8 +150,8 @@ impl ResourceManager {
                 binding: META_BUFFER_BINDING_TEXTURE,
                 image: &textures[handle as usize],
                 layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
-                sampler: None,
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                sampler: Some(&self.default_sampler),
                 array_index: handle,
             });
         Ok(handle)
@@ -301,6 +311,11 @@ impl<T> GpuBuffer<T> {
     }
 
     pub fn add(&mut self, data: &[T]) -> anyhow::Result<u32> {
+        if data.is_empty() {
+            // Avoid creating 0-sized staging buffers (invalid in Vulkan).
+            return Ok(self.num_elems);
+        }
+
         if self.num_elems as usize + data.len() > self.max_elems {
             anyhow::bail!("GpuBuffer overflow");
         }

@@ -1,38 +1,14 @@
 use std::sync::Arc;
 
 use lantir_hal::{
-    vk, AllocationCreateFlags, Buffer, CommandBuffer, DescriptorSet, RenderEngine, UpdateFrequency,
+    AllocationCreateFlags, Buffer, CommandBuffer, DescriptorSet, RenderEngine, UpdateFrequency, vk,
 };
-
-use crate::material::{GPUDrawPushConstants, MetallicRoughnessMatInstance};
 
 pub struct Mesh {
     vertex_buffer: Buffer,
     index_buffer: Buffer,
     index_count: u32,
     pub vertices: Vec<Vertex>,
-}
-
-pub struct RenderObject {
-    pub mesh: Mesh,
-    pub material: MetallicRoughnessMatInstance,
-    pub transform: glam::Mat4,
-}
-
-impl RenderObject {
-    pub fn draw(&self, engine: &RenderEngine, cb: &CommandBuffer, scene_set: &DescriptorSet) {
-        self.material.bind(engine, cb, scene_set);
-
-        let push_constants = GPUDrawPushConstants {
-            render_matrix: self.transform,
-            vert_address: self.mesh.vertex_buffer.get_device_address(),
-        };
-
-        self.material.push_constants(engine, &push_constants, cb);
-        cb.cmd_bind_index_buffer(&engine, &self.mesh.index_buffer, vk::IndexType::UINT32);
-
-        cb.cmd_draw_indexed(&engine, self.mesh.index_count, 1);
-    }
 }
 
 pub fn load_mesh(

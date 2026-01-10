@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 lantir-hal = { path = "../../lib/lantir-hal" }
+lantir = { path = "../../lib/lantir" }
 
 winit = { version = "0.29", features = ["rwh_06"] }
 anyhow = "1.0.100"
