@@ -15,13 +15,14 @@ pub struct ResourceManager {
     items_buffer: Mutex<GpuBuffer<DrawItem>>,
     global_indirect_buffer: Mutex<GpuBuffer<vk::DrawIndexedIndirectCommand>>,
 
-    mesh_buffer: Mutex<MirroredBuffer<GpuMesh>>,
     material_buffer: Mutex<MirroredBuffer<PbrMaterial>>,
 
     meta_descritor_set_layout: Arc<lantir_hal::DescriptorSetLayout>,
     meta_descriptor_set: DescriptorSet,
 
     textures: Mutex<Vec<Texture>>,
+
+    uploaded_meshes: Mutex<Vec<UploadedMesh>>,
 }
 
 impl ResourceManager {
@@ -29,7 +30,12 @@ impl ResourceManager {
         // Build buffers first (without Mutex) so we can initialize descriptor sets
         // without locking during construction.
         let vertex_buffer = GpuBuffer::new(engine.clone(), MAX_VERTICES, UpdateFrequency::Static)?;
-        let index_buffer = GpuBuffer::new(engine.clone(), MAX_INDICES, UpdateFrequency::Static)?;
+        let index_buffer = GpuBuffer::new_with_usage(
+            engine.clone(),
+            MAX_INDICES,
+            UpdateFrequency::Static,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+        )?;
         let items_buffer =
             GpuBuffer::new(engine.clone(), MAX_DRAW_ITEMS, UpdateFrequency::PerFrame)?;
         let global_indirect_buffer = GpuBuffer::new_with_usage(
@@ -39,7 +45,6 @@ impl ResourceManager {
             vk::BufferUsageFlags::INDIRECT_BUFFER,
         )?;
 
-        let mesh_buffer = MirroredBuffer::new(engine.clone(), MAX_MESHES)?;
         let material_buffer = MirroredBuffer::new(engine.clone(), MAX_MATERIALS)?;
 
         let meta_descritor_set_layout = DescriptorSetLayout::new(
@@ -49,13 +54,6 @@ impl ResourceManager {
                 lantir_hal::DescriptorSetBinding {
                     typ: vk::DescriptorType::STORAGE_BUFFER,
                     binding: META_BUFFER_BINDING_VERTEX,
-                    stage: vk::ShaderStageFlags::ALL,
-                    count: 1,
-                },
-                // mesh buffer
-                lantir_hal::DescriptorSetBinding {
-                    typ: vk::DescriptorType::STORAGE_BUFFER,
-                    binding: META_BUFFER_BINDING_MESH,
                     stage: vk::ShaderStageFlags::ALL,
                     count: 1,
                 },
@@ -97,14 +95,6 @@ impl ResourceManager {
         });
 
         meta_descriptor_set.write_buffer(&lantir_hal::WriteBufferInfo {
-            binding: META_BUFFER_BINDING_MESH,
-            buffer: mesh_buffer.buffer(),
-            offset: 0,
-            size: mesh_buffer.capacity_bytes(),
-            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-        });
-
-        meta_descriptor_set.write_buffer(&lantir_hal::WriteBufferInfo {
             binding: META_BUFFER_BINDING_MATERIAL,
             buffer: material_buffer.buffer(),
             offset: 0,
@@ -120,16 +110,18 @@ impl ResourceManager {
             descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
         });
 
+        let uploaded_meshes = Mutex::new(Vec::with_capacity(MAX_MESHES));
+
         Ok(ResourceManager {
             vertex_buffer: Mutex::new(vertex_buffer),
             index_buffer: Mutex::new(index_buffer),
-            mesh_buffer: Mutex::new(mesh_buffer),
             material_buffer: Mutex::new(material_buffer),
             meta_descritor_set_layout,
             meta_descriptor_set,
             textures: Mutex::new(Vec::with_capacity(MAX_TEXTURES)),
             items_buffer: Mutex::new(items_buffer),
             global_indirect_buffer: Mutex::new(global_indirect_buffer),
+            uploaded_meshes,
         })
     }
 
@@ -159,22 +151,23 @@ impl ResourceManager {
         let vertex_offset = {
             let mut vb = self.vertex_buffer.lock();
             vb.add(&mesh.vertices)?
-        };
+        } as i32;
 
         let index_offset = {
             let mut ib = self.index_buffer.lock();
             ib.add(&mesh.indices)?
         };
 
-        let mesh = GpuMesh {
+        let mesh = UploadedMesh {
             vertex_offset,
             index_offset,
             index_count: mesh.indices.len() as u32,
         };
 
         let handle = {
-            let mut mb = self.mesh_buffer.lock();
-            mb.add(mesh)?
+            let mut mb = self.uploaded_meshes.lock();
+            mb.push(mesh);
+            (mb.len() - 1) as MeshHandle
         };
 
         Ok(handle)
@@ -189,9 +182,9 @@ impl ResourceManager {
         Ok(handle)
     }
 
-    pub fn get_mesh(&self, handle: MeshHandle) -> GpuMesh {
-        let mb = self.mesh_buffer.lock();
-        mb.get(handle as usize)
+    pub fn get_mesh(&self, handle: MeshHandle) -> UploadedMesh {
+        let mb = self.uploaded_meshes.lock();
+        mb[handle as usize]
     }
 
     pub fn get_material(&self, handle: MaterialHandle) -> PbrMaterial {
@@ -238,7 +231,7 @@ impl ResourceManager {
     pub fn add_indirect_draw_commands(
         &self,
         cmd: &[vk::DrawIndexedIndirectCommand],
-    ) -> anyhow::Result<u64> {
+    ) -> anyhow::Result<u32> {
         let mut db = self.global_indirect_buffer.lock();
         db.add(cmd)
     }
@@ -246,7 +239,7 @@ impl ResourceManager {
 
 struct GpuBuffer<T: Sized> {
     buffer: Buffer,
-    num_elems: u64,
+    num_elems: u32,
     max_elems: usize,
     marker: PhantomData<T>,
     engine: Arc<RenderEngine>,
@@ -307,12 +300,12 @@ impl<T> GpuBuffer<T> {
         (self.max_elems * std::mem::size_of::<T>()) as u64
     }
 
-    pub fn add(&mut self, data: &[T]) -> anyhow::Result<u64> {
+    pub fn add(&mut self, data: &[T]) -> anyhow::Result<u32> {
         if self.num_elems as usize + data.len() > self.max_elems {
             anyhow::bail!("GpuBuffer overflow");
         }
 
-        let offset = self.num_elems * size_of::<T>() as u64;
+        let offset = self.num_elems as u64 * std::mem::size_of::<T>() as u64;
         let staging_size = (data.len() * std::mem::size_of::<T>()) as u64;
 
         let staging_buffer = Buffer::new(
@@ -350,8 +343,8 @@ impl<T> GpuBuffer<T> {
             );
         })?;
 
-        let res: u64 = self.num_elems;
-        self.num_elems += data.len() as u64;
+        let res = self.num_elems;
+        self.num_elems += data.len() as u32;
         Ok(res)
     }
 

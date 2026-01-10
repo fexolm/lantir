@@ -154,8 +154,8 @@ impl RenderPass for OpaquePass {
             commands.push(vk::DrawIndexedIndirectCommand {
                 index_count: mesh.index_count,
                 instance_count: 1,
-                first_index: mesh.index_offset as u32,
-                vertex_offset: mesh.vertex_offset as i32,
+                first_index: mesh.index_offset,
+                vertex_offset: mesh.vertex_offset,
                 first_instance: i as u32,
             });
         }
@@ -167,14 +167,15 @@ impl RenderPass for OpaquePass {
 
         let indirect_buffer_offset = renderer
             .get_resource_manager()
-            .add_indirect_draw_commands(&commands)?;
+            .add_indirect_draw_commands(&commands)? as u64
+            * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
 
         cb.cmd_draw_indexed_indirect(
             &renderer.get_engine(),
             &renderer.get_resource_manager().get_global_indirect_buffer(),
             indirect_buffer_offset,
             commands.len() as u32,
-            std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+            size_of::<vk::DrawIndexedIndirectCommand>() as u32,
         );
 
         cb.cmd_end_rendering(&renderer.get_engine());

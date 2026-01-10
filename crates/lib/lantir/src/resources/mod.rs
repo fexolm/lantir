@@ -15,10 +15,9 @@ pub const MAX_VERTICES: usize = 16_000_000;
 pub const MAX_INDICES: usize = 32_000_000;
 
 pub const META_BUFFER_BINDING_VERTEX: u32 = 0;
-pub const META_BUFFER_BINDING_MESH: u32 = 1;
-pub const META_BUFFER_BINDING_MATERIAL: u32 = 2;
-pub const META_BUFFER_BINDING_TEXTURE: u32 = 3;
-pub const META_BUFFER_BINDING_DRAW_ITEMS: u32 = 4;
+pub const META_BUFFER_BINDING_MATERIAL: u32 = 1;
+pub const META_BUFFER_BINDING_TEXTURE: u32 = 2;
+pub const META_BUFFER_BINDING_DRAW_ITEMS: u32 = 3;
 
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -51,11 +50,10 @@ pub struct DrawItem {
     pub material: MaterialHandle,
 }
 
-#[repr(C)]
 #[derive(Copy, Clone)]
-pub struct GpuMesh {
-    pub vertex_offset: u64,
-    pub index_offset: u64,
+pub struct UploadedMesh {
+    pub vertex_offset: i32,
+    pub index_offset: u32,
     pub index_count: u32,
 }
 

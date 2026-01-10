@@ -1,7 +1,7 @@
 use lantir_hal::{
     BlendingMode, Buffer, CommandBuffer, DescriptorSet, DescriptorSetBinding, DescriptorSetLayout,
     GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout, RenderEngine, Sampler, Shader,
-    Texture, UpdateFrequency, WriteBufferInfo, WriteImageInfo, vk,
+    Texture, WriteBufferInfo, WriteImageInfo, vk,
 };
 use shaderc::ShaderKind;
 use std::sync::Arc;
@@ -68,6 +68,7 @@ impl MetallicRoughnessMat {
                 typ: vk::DescriptorType::UNIFORM_BUFFER,
                 binding: 0,
                 stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                count: 1,
             }];
             DescriptorSetLayout::new(engine.clone(), &bindings)?
         };
@@ -77,16 +78,19 @@ impl MetallicRoughnessMat {
                 typ: vk::DescriptorType::UNIFORM_BUFFER,
                 binding: 0,
                 stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                count: 1,
             },
             DescriptorSetBinding {
                 typ: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 binding: 1,
                 stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                count: 1,
             },
             DescriptorSetBinding {
                 typ: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 binding: 2,
                 stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                count: 1,
             },
         ];
 
@@ -126,11 +130,7 @@ impl MetallicRoughnessMat {
         self: &Arc<Self>,
         engine: Arc<RenderEngine>,
     ) -> anyhow::Result<MetallicRoughnessMatInstance> {
-        let descriptor_set = DescriptorSet::new(
-            engine,
-            self.descriptor_set_layout.clone(),
-            UpdateFrequency::Static,
-        )?;
+        let descriptor_set = DescriptorSet::new(engine, self.descriptor_set_layout.clone())?;
 
         Ok(MetallicRoughnessMatInstance {
             mat: self.clone(),
@@ -157,6 +157,7 @@ impl MetallicRoughnessMatInstance {
             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             sampler: Some(sampler),
+            array_index: 0,
         });
     }
 
@@ -167,6 +168,7 @@ impl MetallicRoughnessMatInstance {
             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             sampler: Some(sampler),
+            array_index: 0,
         });
     }
 

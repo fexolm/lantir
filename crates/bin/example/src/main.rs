@@ -581,11 +581,12 @@ impl App {
                 typ: vk::DescriptorType::UNIFORM_BUFFER,
                 binding: 0,
                 stage: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                count: 1,
             }];
             DescriptorSetLayout::new(engine.clone(), &bindings)?
         };
 
-        let scene_set = DescriptorSet::new(engine.clone(), scene_dsl, UpdateFrequency::PerFrame)?;
+        let scene_set = DescriptorSet::new(engine.clone(), scene_dsl)?;
         scene_set.write_buffer(&WriteBufferInfo {
             binding: 0,
             buffer: &scene_uniform,
