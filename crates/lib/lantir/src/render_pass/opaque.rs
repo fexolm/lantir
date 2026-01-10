@@ -33,9 +33,7 @@ impl OpaquePass {
         color_target: Arc<Texture>,
         depth_target: Arc<Texture>,
     ) -> anyhow::Result<Self> {
-        let vertex_shader = Shader::new_u32(engine.clone(), include_shader!("opaque.vert.hlsl"))?;
-
-        let fragment_shader = Shader::new_u32(engine.clone(), include_shader!("opaque.frag.hlsl"))?;
+        let shader = Shader::new_u32(engine.clone(), include_shader!("opaque.hlsl"))?;
 
         let push_constants = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX,
@@ -52,8 +50,8 @@ impl OpaquePass {
         let pipeline = GraphicsPipeline::new(
             engine.clone(),
             &GraphicsPipelineCreateInfo {
-                vertex_shader: &vertex_shader,
-                fragment_shader: &fragment_shader,
+                vertex_shader: &shader,
+                fragment_shader: &shader,
                 layout: &pipeline_layout,
                 topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                 polygon_mode: vk::PolygonMode::FILL,

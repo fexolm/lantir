@@ -83,7 +83,7 @@ impl ComputePipelineData {
         let stage_info = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(shader.shader)
-            .name(c"main");
+            .name(c"cs_main");
 
         let infos = [vk::ComputePipelineCreateInfo::default()
             .stage(stage_info)
@@ -175,17 +175,6 @@ impl GraphicsPipelineData {
         engine: &RenderEngine,
         create_info: &GraphicsPipelineCreateInfo,
     ) -> anyhow::Result<Self> {
-        let shader_stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(create_info.vertex_shader.shader)
-                .name(c"main"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(create_info.fragment_shader.shader)
-                .name(c"main"),
-        ];
-
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
 
         let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
@@ -227,6 +216,17 @@ impl GraphicsPipelineData {
 
         let color_attachment_formats = [create_info.color_attachment_format];
 
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(create_info.vertex_shader.shader)
+                .name(c"vs_main"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(create_info.fragment_shader.shader)
+                .name(c"ps_main"),
+        ];
+
         let mut render_info = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_attachment_formats)
             .depth_attachment_format(create_info.depth_format);
@@ -244,12 +244,14 @@ impl GraphicsPipelineData {
             .depth_stencil_state(&depth_stencil_state)
             .layout(create_info.layout.layout)
             .dynamic_state(&dynamic_state);
+
         let pipeline = unsafe {
             engine
                 .device
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-                .map_err(|(_, e)| e)?[0]
-        };
+                .map_err(|(_, e)| anyhow::anyhow!("Failed to create graphics pipeline: {e:?}"))
+                .map(|v| v[0])
+        }?;
 
         Ok(GraphicsPipelineData {
             pipeline,
