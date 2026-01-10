@@ -8,6 +8,7 @@ pub struct DescriptorSetBinding {
     pub typ: vk::DescriptorType,
     pub binding: u32,
     pub stage: vk::ShaderStageFlags,
+    pub count: u32,
 }
 pub type DescriptorSetLayout = Resource<DescriptorSetLayoutData>;
 
@@ -29,6 +30,7 @@ pub struct WriteImageInfo<'i> {
     pub layout: vk::ImageLayout,
     pub descriptor_type: vk::DescriptorType,
     pub sampler: Option<&'i Sampler>,
+    pub array_index: u64,
 }
 
 pub struct WriteBufferInfo<'i> {
@@ -69,7 +71,8 @@ impl DescriptorSet {
                 .dst_set(dst_set)
                 .dst_binding(image_info.binding)
                 .descriptor_type(image_info.descriptor_type)
-                .image_info(&img_infos);
+                .image_info(&img_infos)
+                .dst_array_element(image_info.array_index as u32);
 
             unsafe {
                 self.engine
@@ -112,7 +115,7 @@ impl DescriptorSetLayoutData {
             .map(|b| vk::DescriptorSetLayoutBinding {
                 binding: b.binding,
                 descriptor_type: b.typ,
-                descriptor_count: 1,
+                descriptor_count: b.count,
                 stage_flags: b.stage,
                 p_immutable_samplers: std::ptr::null(),
                 _marker: std::marker::PhantomData,

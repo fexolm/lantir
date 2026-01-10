@@ -1,10 +1,10 @@
-﻿use crate::device::Device;
+﻿use crate::CommandBuffer;
+use crate::device::Device;
 use crate::frame::RenderFrame;
 use crate::instance::Instance;
 use crate::resource::DeferDrop;
 use crate::surface::Surface;
 use crate::swapchain::{Swapchain, SwapchainImage};
-use crate::CommandBuffer;
 use anyhow::anyhow;
 use ash::vk;
 use std::sync::{Arc, Mutex};
@@ -75,7 +75,10 @@ impl RenderEngine {
                 let create_info = vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(100000)
-                    .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
+                    .flags(
+                        vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET
+                            | vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND,
+                    );
 
                 device.create_descriptor_pool(&create_info, None).unwrap()
             };

@@ -1,0 +1,9 @@
+[package]
+name = "lantir"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+"lantir-hal" = { path = "../lantir-hal" }
+glam = "0.30.10"
+anyhow = "1.0.100"

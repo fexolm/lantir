@@ -695,6 +695,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lantir"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "lantir-hal",
+]
+
+[[package]]
 name = "lantir-hal"
 version = "0.1.0"
 dependencies = [
