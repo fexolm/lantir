@@ -1,5 +1,4 @@
-﻿mod render_object;
-
+﻿use lantir::resources::{DrawItem, INVALID_RESOURCE_HANDLE, PbrMaterial, TriMesh, Vertex};
 use lantir::scene::{Camera, Scene};
 use lantir::world_renderer::{self, WorldRenderer, WorldRendererConfig};
 use lantir_hal::{RenderEngine, RenderEngineConfig, vk};
@@ -173,316 +172,141 @@ struct App {
     window: Window,
     world_renderer: WorldRenderer,
 
+    draw_items: Vec<DrawItem>,
+
     camera: OrbitCamera,
     camera_input: CameraInput,
     last_frame_time: Instant,
 }
 
-// fn load_texture(
-//     engine: Arc<RenderEngine>,
-//     data: &[u8],
-//     extent: vk::Extent3D,
-//     format: vk::Format,
-//     usage: vk::ImageUsageFlags,
-//     mip_levels: u32,
-// ) -> anyhow::Result<Texture> {
-//     let staging_buffer = Buffer::new(
-//         engine.clone(),
-//         &BufferCreateInfo {
-//             size: data.len() as u64,
-//             update_frequency: UpdateFrequency::Static,
-//             memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
-//                 | vk::MemoryPropertyFlags::HOST_COHERENT,
-//             vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-//             usage: vk::BufferUsageFlags::TRANSFER_SRC,
-//         },
-//     )?;
+fn load_gltf_draw_items(
+    world_renderer: &WorldRenderer,
+    gltf_bytes: &[u8],
+    external_buffers: &[(&str, &[u8])],
+) -> anyhow::Result<Vec<DrawItem>> {
+    let rm = world_renderer.get_resource_manager();
 
-//     unsafe {
-//         let staging_buffer_map = staging_buffer.map()?;
-//         std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, staging_buffer_map, data.len());
-//         staging_buffer.unmap();
-//     }
+    let gltf = gltf::Gltf::from_slice(gltf_bytes)?;
 
-//     let texture = Texture::new(
-//         engine.clone(),
-//         &TextureCreateInfo {
-//             image_type: ImageType::TYPE_2D,
-//             update_frequency: UpdateFrequency::Static,
-//             format,
-//             extent,
-//             usage: usage | vk::ImageUsageFlags::TRANSFER_DST,
-//             aspect: vk::ImageAspectFlags::COLOR,
-//             mip_levels,
-//         },
-//     )?;
+    fn node_transform(node: &gltf::Node) -> glam::Mat4 {
+        match node.transform() {
+            gltf::scene::Transform::Matrix { matrix } => glam::Mat4::from_cols_array_2d(&matrix),
+            gltf::scene::Transform::Decomposed {
+                translation,
+                rotation,
+                scale,
+            } => {
+                let t = glam::Mat4::from_translation(glam::Vec3::from(translation));
+                let r = glam::Mat4::from_quat(glam::Quat::from_array(rotation));
+                let s = glam::Mat4::from_scale(glam::Vec3::from(scale));
+                t * r * s
+            }
+        }
+    }
 
-//     engine.immediate_submit(|cb| {
-//         cb.cmd_image_barrier(
-//             &engine,
-//             &ImageBarrier {
-//                 previous_accesses: &[AccessType::Nothing],
-//                 next_accesses: &[AccessType::TransferWrite],
-//                 previous_layout: vk::ImageLayout::UNDEFINED,
-//                 next_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-//                 image: &texture,
-//                 aspect_mask: vk::ImageAspectFlags::COLOR,
-//             },
-//         );
+    fn load_node(
+        node: gltf::Node,
+        gltf: &gltf::Gltf,
+        external_buffers: &[(&str, &[u8])],
+        parent_transform: glam::Mat4,
+        rm: &lantir::resources::resource_manager::ResourceManager,
+        draw_items: &mut Vec<DrawItem>,
+    ) -> anyhow::Result<()> {
+        let world_transform = parent_transform * node_transform(&node);
 
-//         cb.cmd_copy_buffer_to_image(
-//             &engine,
-//             &CopyBufferImageInfo {
-//                 buffer: &staging_buffer,
-//                 image: &texture,
-//                 image_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-//                 image_aspect_mask: vk::ImageAspectFlags::COLOR,
-//                 image_extent: extent,
-//             },
-//         );
+        if let Some(mesh) = node.mesh() {
+            for primitive in mesh.primitives() {
+                let reader = primitive.reader(|buffer| match buffer.source() {
+                    gltf::buffer::Source::Bin => gltf.blob.as_deref(),
+                    gltf::buffer::Source::Uri(uri) => external_buffers
+                        .iter()
+                        .find_map(|(name, bytes)| (*name == uri).then_some(*bytes)),
+                });
 
-//         cb.cmd_image_barrier(
-//             &engine,
-//             &ImageBarrier {
-//                 previous_accesses: &[AccessType::TransferWrite],
-//                 next_accesses: &[AccessType::FragmentShaderReadSampledImageOrUniformTexelBuffer],
-//                 previous_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-//                 next_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-//                 image: &texture,
-//                 aspect_mask: vk::ImageAspectFlags::COLOR,
-//             },
-//         );
-//     })?;
+                let Some(positions) = reader.read_positions() else {
+                    continue;
+                };
+                let positions: Vec<[f32; 3]> = positions.collect();
 
-//     Ok(texture)
-// }
+                let normals: Vec<[f32; 3]> = reader
+                    .read_normals()
+                    .map(|it| it.collect())
+                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
-// fn load_glfw(
-//     engine: Arc<RenderEngine>,
-//     gltf_bytes: &[u8],
-//     external_buffers: &[(&str, &[u8])],
-// ) -> anyhow::Result<Scene> {
-//     let gltf = Gltf::from_slice(gltf_bytes)?;
+                let tex_coords: Vec<[f32; 2]> = reader
+                    .read_tex_coords(0)
+                    .map(|it| it.into_f32().collect())
+                    .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
-//     let mut cnt = 0;
+                let indices: Vec<u32> = reader
+                    .read_indices()
+                    .map(|it| it.into_u32().collect())
+                    .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
-//     let mr_mat = MetallicRoughnessMat::new(engine.clone())?;
+                let mut vertices = Vec::with_capacity(positions.len());
+                for i in 0..positions.len() {
+                    vertices.push(Vertex {
+                        position: glam::Vec3::from(positions[i]),
+                        normal: glam::Vec3::from(normals[i]),
+                        color: glam::Vec4::ONE,
+                        uv: glam::Vec2::from(tex_coords[i]),
+                    });
+                }
 
-//     let mut textures = Vec::new();
-//     let mut samplers = Vec::new();
-//     let mut objects = Vec::new();
-//     let mut buffers = Vec::new();
+                let mesh_handle = rm.add_mesh(&TriMesh { vertices, indices })?;
 
-//     static WHITE_TEXTURE_DATA: [u8; 16] = [
-//         255, 255, 255, 255, // Пиксель 1
-//         255, 255, 255, 255, // Пиксель 2
-//         255, 255, 255, 255, // Пиксель 3
-//         255, 255, 255, 255, // Пиксель 4
-//     ];
+                let pbr = primitive.material().pbr_metallic_roughness();
+                let base_color = glam::Vec4::from_array(pbr.base_color_factor());
 
-//     let white_texture = load_texture(
-//         engine.clone(),
-//         &WHITE_TEXTURE_DATA,
-//         vk::Extent3D {
-//             width: 2,
-//             height: 2,
-//             depth: 1,
-//         },
-//         vk::Format::B8G8R8A8_UNORM,
-//         vk::ImageUsageFlags::SAMPLED,
-//         1,
-//     )?;
+                let material_handle = rm.add_material(PbrMaterial {
+                    albedo_tex: INVALID_RESOURCE_HANDLE,
+                    normal_tex: INVALID_RESOURCE_HANDLE,
+                    metallic_roughness_tex: INVALID_RESOURCE_HANDLE,
+                    emissive_tex: INVALID_RESOURCE_HANDLE,
+                    base_color,
+                    emissive_color: glam::Vec3::ZERO,
+                    metallness: pbr.metallic_factor(),
+                    roughness: pbr.roughness_factor(),
+                })?;
 
-//     let sampler = Sampler::new(
-//         engine.clone(),
-//         &SamplerInfo {
-//             filter: vk::Filter::LINEAR,
-//         },
-//     )?;
+                draw_items.push(DrawItem {
+                    transform: world_transform,
+                    mesh: mesh_handle,
+                    material: material_handle,
+                });
+            }
+        }
 
-//     fn load_node_meshes(
-//         node: gltf::Node,
-//         gltf: &Gltf,
-//         engine: Arc<RenderEngine>,
-//         mr_mat: &Arc<MetallicRoughnessMat>,
-//         white_texture: &Texture,
-//         sampler: &Sampler,
-//         external_buffers: &[(&str, &[u8])],
-//         parent_transform: glam::Mat4,
-//         objects: &mut Vec<RenderObject>,
-//         buffers: &mut Vec<Buffer>,
-//         cnt: &mut usize,
-//     ) -> anyhow::Result<()> {
-//         let local_transform = match node.transform() {
-//             gltf::scene::Transform::Matrix { matrix } => glam::Mat4::from_cols_array_2d(&matrix),
-//             gltf::scene::Transform::Decomposed {
-//                 translation,
-//                 rotation,
-//                 scale,
-//             } => {
-//                 let t = glam::Mat4::from_translation(glam::Vec3::from(translation));
-//                 let r = glam::Mat4::from_quat(glam::Quat::from_array(rotation));
-//                 let s = glam::Mat4::from_scale(glam::Vec3::from(scale));
-//                 t * r * s
-//             }
-//         };
+        for child in node.children() {
+            load_node(
+                child,
+                gltf,
+                external_buffers,
+                world_transform,
+                rm,
+                draw_items,
+            )?;
+        }
 
-//         let world_transform = parent_transform * local_transform;
+        Ok(())
+    }
 
-//         if let Some(mesh) = node.mesh() {
-//             for primitive in mesh.primitives() {
-//                 let reader = primitive.reader(|buffer| match buffer.source() {
-//                     gltf::buffer::Source::Bin => gltf.blob.as_deref(),
-//                     gltf::buffer::Source::Uri(uri) => external_buffers
-//                         .iter()
-//                         .find_map(|(name, bytes)| (*name == uri).then_some(*bytes)),
-//                 });
+    let mut draw_items = Vec::new();
+    for scene in gltf.scenes() {
+        for node in scene.nodes() {
+            load_node(
+                node,
+                &gltf,
+                external_buffers,
+                glam::Mat4::IDENTITY,
+                rm,
+                &mut draw_items,
+            )?;
+        }
+    }
 
-//                 let Some(positions) = reader.read_positions() else {
-//                     continue;
-//                 };
-
-//                 let positions: Vec<_> = positions.collect();
-
-//                 let normals: Vec<[f32; 3]> = reader
-//                     .read_normals()
-//                     .ok_or_else(|| anyhow::anyhow!("No normals in mesh"))?
-//                     .collect();
-
-//                 let tex_coords: Vec<[f32; 2]> = if let Some(tex_coords) = reader.read_tex_coords(0)
-//                 {
-//                     tex_coords.into_f32().collect()
-//                 } else {
-//                     vec![[0.0, 0.0]; positions.len()]
-//                 };
-
-//                 let indices: Vec<u32> = reader
-//                     .read_indices()
-//                     .ok_or_else(|| anyhow::anyhow!("No indices in mesh"))?
-//                     .into_u32()
-//                     .collect();
-
-//                 let mut vertices = Vec::new();
-
-//                 for i in 0..positions.len() {
-//                     vertices.push(Vertex {
-//                         position: glam::Vec3::from(positions[i]),
-//                         normal: glam::Vec3::from(normals[i]),
-//                         color: glam::Vec4::ONE,
-//                         uv: glam::Vec2::from(tex_coords[i]),
-//                     });
-//                 }
-
-//                 let constants_buf = Buffer::new(
-//                     engine.clone(),
-//                     &BufferCreateInfo {
-//                         size: size_of::<MaterialConstants>() as u64,
-//                         update_frequency: UpdateFrequency::PerFrame,
-//                         memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
-//                             | vk::MemoryPropertyFlags::HOST_COHERENT,
-//                         vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-//                         usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
-//                     },
-//                 )?;
-
-//                 let mesh = crate::render_object::load_mesh(engine.clone(), &vertices, &indices)?;
-//                 let material = mr_mat.new_instance(engine.clone())?;
-
-//                 *cnt += 1;
-
-//                 let constants = MaterialConstants {
-//                     color_factors: glam::Vec4::from_array(
-//                         primitive
-//                             .material()
-//                             .pbr_metallic_roughness()
-//                             .base_color_factor(),
-//                     ),
-//                     metal_rough_factors: glam::Vec4::new(
-//                         primitive
-//                             .material()
-//                             .pbr_metallic_roughness()
-//                             .metallic_factor(),
-//                         primitive
-//                             .material()
-//                             .pbr_metallic_roughness()
-//                             .roughness_factor(),
-//                         0.,
-//                         0.,
-//                     ),
-//                     extra: [Default::default(); 14],
-//                 };
-
-//                 unsafe {
-//                     let data = constants_buf.map()?;
-//                     std::ptr::copy_nonoverlapping(
-//                         (&constants) as *const MaterialConstants as *const u8,
-//                         data,
-//                         size_of::<MaterialConstants>(),
-//                     );
-//                     constants_buf.unmap();
-//                 }
-
-//                 material.set_material_constants(&constants_buf, 0);
-//                 material.set_color_image(&white_texture, &sampler);
-//                 material.set_metal_rough_image(&white_texture, &sampler);
-
-//                 buffers.push(constants_buf);
-
-//                 objects.push(RenderObject {
-//                     mesh,
-//                     material,
-//                     transform: world_transform,
-//                 });
-//             }
-//         }
-
-//         for child in node.children() {
-//             load_node_meshes(
-//                 child,
-//                 gltf,
-//                 engine.clone(),
-//                 mr_mat,
-//                 white_texture,
-//                 sampler,
-//                 external_buffers,
-//                 world_transform,
-//                 objects,
-//                 buffers,
-//                 cnt,
-//             )?;
-//         }
-
-//         Ok(())
-//     }
-
-//     for scene in gltf.scenes() {
-//         for node in scene.nodes() {
-//             load_node_meshes(
-//                 node,
-//                 &gltf,
-//                 engine.clone(),
-//                 &mr_mat,
-//                 &white_texture,
-//                 &sampler,
-//                 external_buffers,
-//                 glam::Mat4::IDENTITY,
-//                 &mut objects,
-//                 &mut buffers,
-//                 &mut cnt,
-//             )?;
-//         }
-//     }
-
-//     textures.push(white_texture);
-//     samplers.push(sampler);
-
-//     Ok(Scene {
-//         textures,
-//         objects,
-//         buffers,
-//         samplers,
-//     })
-// }
+    Ok(draw_items)
+}
 
 impl App {
     fn new(event_loop: &EventLoop<()>) -> anyhow::Result<Self> {
@@ -514,9 +338,16 @@ impl App {
             },
         )?;
 
+        let draw_items = load_gltf_draw_items(
+            &world_renderer,
+            include_bytes!("assets/scene.gltf"),
+            &[("scene.bin", include_bytes!("assets/scene.bin") as &[u8])],
+        )?;
+
         Ok(App {
             window,
             world_renderer,
+            draw_items,
             camera: OrbitCamera::default(),
             camera_input: CameraInput::default(),
             last_frame_time: Instant::now(),
@@ -602,12 +433,12 @@ impl App {
         let camera = Camera {
             view,
             proj,
-            viewproj: view * proj,
+            viewproj: proj * view,
         };
 
         let scene = Scene {
             camera,
-            draw_items: &[],
+            draw_items: &self.draw_items,
         };
 
         self.world_renderer.draw_frame(&scene).unwrap();

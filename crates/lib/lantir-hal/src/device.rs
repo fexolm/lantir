@@ -31,6 +31,8 @@ impl Device {
             let features = vk::PhysicalDeviceFeatures {
                 shader_clip_distance: 1,
                 shader_sampled_image_array_dynamic_indexing: 1,
+                multi_draw_indirect: 1,
+                draw_indirect_first_instance: 1,
                 ..Default::default()
             };
 
