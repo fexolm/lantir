@@ -10,6 +10,11 @@ impl Shader {
         let data = ShaderData::new(&engine, code)?;
         Ok(Arc::new(Resource::make(engine, data)))
     }
+
+    pub fn new_u32(engine: Arc<RenderEngine>, code: &[u32]) -> anyhow::Result<Arc<Self>> {
+        let data = ShaderData::new_u32(&engine, code)?;
+        Ok(Arc::new(Resource::make(engine, data)))
+    }
 }
 
 pub struct ShaderData {
@@ -30,6 +35,12 @@ impl ShaderData {
 
         let shader = unsafe { engine.device.create_shader_module(&create_info, None)? };
 
+        Ok(Self { shader })
+    }
+
+    pub fn new_u32(engine: &RenderEngine, code: &[u32]) -> anyhow::Result<Self> {
+        let create_info = vk::ShaderModuleCreateInfo::default().code(code);
+        let shader = unsafe { engine.device.create_shader_module(&create_info, None)? };
         Ok(Self { shader })
     }
 }

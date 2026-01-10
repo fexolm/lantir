@@ -23,6 +23,7 @@ pub use command_buffer::{
 };
 pub use descriptor_set::{
     DescriptorSet, DescriptorSetBinding, DescriptorSetLayout, WriteBufferInfo, WriteImageInfo,
+    WriteSamplerInfo,
 };
 pub use engine::{RenderEngine, RenderEngineConfig};
 pub use frame::RenderFrame;

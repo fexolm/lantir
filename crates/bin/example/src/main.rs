@@ -260,9 +260,13 @@ fn load_gltf_draw_items(
 
                 let material_handle = rm.add_material(PbrMaterial {
                     albedo_tex: INVALID_RESOURCE_HANDLE,
+                    albedo_sampler: INVALID_RESOURCE_HANDLE,
                     normal_tex: INVALID_RESOURCE_HANDLE,
+                    normal_sampler: INVALID_RESOURCE_HANDLE,
                     metallic_roughness_tex: INVALID_RESOURCE_HANDLE,
+                    metallic_roughness_sampler: INVALID_RESOURCE_HANDLE,
                     emissive_tex: INVALID_RESOURCE_HANDLE,
+                    emissive_sampler: INVALID_RESOURCE_HANDLE,
                     base_color,
                     emissive_color: glam::Vec3::ZERO,
                     metallness: pbr.metallic_factor(),

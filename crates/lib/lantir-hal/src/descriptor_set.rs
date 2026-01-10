@@ -33,6 +33,12 @@ pub struct WriteImageInfo<'i> {
     pub array_index: u64,
 }
 
+pub struct WriteSamplerInfo<'i> {
+    pub binding: u32,
+    pub sampler: &'i Sampler,
+    pub array_index: u64,
+}
+
 pub struct WriteBufferInfo<'i> {
     pub binding: u32,
     pub buffer: &'i Buffer,
@@ -76,6 +82,31 @@ impl DescriptorSet {
                 .descriptor_type(image_info.descriptor_type)
                 .image_info(&img_infos)
                 .dst_array_element(image_info.array_index as u32);
+
+            unsafe {
+                self.engine
+                    .device
+                    .update_descriptor_sets(&[descriptor_write], &[]);
+            }
+        }
+    }
+
+    pub fn write_sampler(&self, sampler_info: &WriteSamplerInfo) {
+        assert!(
+            !self.engine.is_started(),
+            "Cannot write to descriptor sets after rendering has started"
+        );
+
+        let img_info = vk::DescriptorImageInfo::default().sampler(sampler_info.sampler.sampler);
+        let img_infos = [img_info];
+
+        for &dst_set in &self.descriptor_sets {
+            let descriptor_write = vk::WriteDescriptorSet::default()
+                .dst_set(dst_set)
+                .dst_binding(sampler_info.binding)
+                .descriptor_type(vk::DescriptorType::SAMPLER)
+                .image_info(&img_infos)
+                .dst_array_element(sampler_info.array_index as u32);
 
             unsafe {
                 self.engine

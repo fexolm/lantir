@@ -4,9 +4,9 @@ use lantir_hal::{
     BlendingMode, CommandBuffer, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout,
     RenderEngine, RenderingAttachmentInfo, RenderingInfo, Shader, Texture, vk,
 };
-use shaderc::ShaderKind;
 
 use crate::{
+    include_shader,
     render_pass::RenderPass,
     resources::resource_manager::ResourceManager,
     scene::{Camera, Scene},
@@ -33,19 +33,9 @@ impl OpaquePass {
         color_target: Arc<Texture>,
         depth_target: Arc<Texture>,
     ) -> anyhow::Result<Self> {
-        let vertex_shader = compile_shader(
-            engine.clone(),
-            "opaque.vert",
-            include_str!("shaders/opaque.vert"),
-            ShaderKind::Vertex,
-        )?;
+        let vertex_shader = Shader::new_u32(engine.clone(), include_shader!("opaque.vert.hlsl"))?;
 
-        let fragment_shader = compile_shader(
-            engine.clone(),
-            "opaque.frag",
-            include_str!("shaders/opaque.frag"),
-            ShaderKind::Fragment,
-        )?;
+        let fragment_shader = Shader::new_u32(engine.clone(), include_shader!("opaque.frag.hlsl"))?;
 
         let push_constants = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX,
@@ -181,25 +171,4 @@ impl RenderPass for OpaquePass {
         cb.cmd_end_rendering(&renderer.get_engine());
         Ok(())
     }
-}
-
-fn compile_shader(
-    engine: Arc<RenderEngine>,
-    name: &str,
-    source: &str,
-    shader_kind: ShaderKind,
-) -> anyhow::Result<Arc<Shader>> {
-    let compiler = shaderc::Compiler::new()?;
-    let mut options = shaderc::CompileOptions::new()?;
-    options.set_target_env(
-        shaderc::TargetEnv::Vulkan,
-        shaderc::EnvVersion::Vulkan1_3 as u32,
-    );
-    options.set_target_spirv(shaderc::SpirvVersion::V1_5);
-    options.set_generate_debug_info();
-
-    let binary_result =
-        compiler.compile_into_spirv(source, shader_kind, name, "main", Some(&options))?;
-
-    Shader::new(engine, binary_result.as_binary_u8())
 }

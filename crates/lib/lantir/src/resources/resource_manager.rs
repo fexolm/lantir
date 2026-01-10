@@ -20,7 +20,7 @@ pub struct ResourceManager {
     meta_descritor_set_layout: Arc<lantir_hal::DescriptorSetLayout>,
     meta_descriptor_set: DescriptorSet,
 
-    default_sampler: Sampler,
+    samplers: Mutex<Vec<Sampler>>,
 
     textures: Mutex<Vec<Texture>>,
 
@@ -75,10 +75,17 @@ impl ResourceManager {
                 },
                 // textures
                 lantir_hal::DescriptorSetBinding {
-                    typ: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    typ: vk::DescriptorType::SAMPLED_IMAGE,
                     binding: META_BUFFER_BINDING_TEXTURE,
                     stage: vk::ShaderStageFlags::ALL,
                     count: MAX_TEXTURES as u32,
+                },
+                // samplers
+                lantir_hal::DescriptorSetBinding {
+                    typ: vk::DescriptorType::SAMPLER,
+                    binding: META_BUFFER_BINDING_SAMPLER,
+                    stage: vk::ShaderStageFlags::ALL,
+                    count: MAX_SAMPLERS as u32,
                 },
                 // draw items
                 lantir_hal::DescriptorSetBinding {
@@ -119,6 +126,23 @@ impl ResourceManager {
             descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
         });
 
+        // Seed sampler array with the default sampler at index 0.
+        let samplers = Mutex::new({
+            let mut v = Vec::with_capacity(MAX_SAMPLERS);
+            v.push(default_sampler);
+            v
+        });
+
+        // Write the default sampler descriptor (index 0).
+        {
+            let v = samplers.lock();
+            meta_descriptor_set.write_sampler(&lantir_hal::WriteSamplerInfo {
+                binding: META_BUFFER_BINDING_SAMPLER,
+                sampler: &v[0],
+                array_index: 0,
+            });
+        }
+
         let uploaded_meshes = Mutex::new(Vec::with_capacity(MAX_MESHES));
 
         Ok(ResourceManager {
@@ -127,12 +151,32 @@ impl ResourceManager {
             material_buffer: Mutex::new(material_buffer),
             meta_descritor_set_layout,
             meta_descriptor_set,
-            default_sampler,
+            samplers,
             textures: Mutex::new(Vec::with_capacity(MAX_TEXTURES)),
             items_buffer: Mutex::new(items_buffer),
             global_indirect_buffer: Mutex::new(global_indirect_buffer),
             uploaded_meshes,
         })
+    }
+
+    pub fn add_sampler(&self, sampler: Sampler) -> anyhow::Result<SamplerHandle> {
+        let mut samplers = self.samplers.lock();
+
+        if samplers.len() >= MAX_SAMPLERS {
+            anyhow::bail!("Exceeded maximum number of samplers");
+        }
+
+        let handle = samplers.len() as SamplerHandle;
+        samplers.push(sampler);
+
+        self.meta_descriptor_set
+            .write_sampler(&lantir_hal::WriteSamplerInfo {
+                binding: META_BUFFER_BINDING_SAMPLER,
+                sampler: &samplers[handle as usize],
+                array_index: handle,
+            });
+
+        Ok(handle)
     }
 
     pub fn add_texture(&self, texture: Texture) -> anyhow::Result<TextureHandle> {
@@ -150,8 +194,8 @@ impl ResourceManager {
                 binding: META_BUFFER_BINDING_TEXTURE,
                 image: &textures[handle as usize],
                 layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                sampler: Some(&self.default_sampler),
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                sampler: None,
                 array_index: handle,
             });
         Ok(handle)

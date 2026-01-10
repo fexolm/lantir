@@ -2,10 +2,13 @@
 name = "lantir"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 "lantir-hal" = { path = "../lantir-hal" }
 glam = "0.30.10"
 anyhow = "1.0.100"
-shaderc = "0.10.1"
 parking_lot = "0.12.5"
+
+[build-dependencies]
+shaderc = "0.10.1"
