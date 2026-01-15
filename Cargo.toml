@@ -3,5 +3,6 @@ resolver = "3"
 members = [
     "crates/lantir_hal",
     "crates/lantir_render",
+    "crates/lantir_gltf",
     "examples",
 ]
