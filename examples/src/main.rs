@@ -121,7 +121,7 @@ fn render_system(
     camera: Res<SpectatorCamera>,
 ) {
     let scene = Scene {
-        camera: camera.get_camera(),
+        camera: camera.get_transform(),
         draw_items: &draw_items.draw_items,
     };
 

@@ -4,7 +4,7 @@ use bevy_input::{
     ButtonInput, keyboard::KeyCode, mouse::{MouseButton, MouseMotion, MouseWheel}
 };
 use bevy_window::{PrimaryWindow, Window};
-use lantir_render::scene::Camera;
+use lantir_render::scene::CameraTransform;
 use std::time::Instant;
 
 #[derive(Resource, Clone, Copy)]
@@ -19,7 +19,7 @@ pub struct SpectatorCamera {
 
     last_update: Instant,
 
-    camera: Camera,
+    camera: CameraTransform,
 }
 
 impl Default for SpectatorCamera {
@@ -33,7 +33,7 @@ impl Default for SpectatorCamera {
         let mut proj = glam::Mat4::perspective_rh(70f32.to_radians(), 16.0 / 9.0, 0.1, 10000.0);
         proj.y_axis.y *= -1.0;
 
-        let camera = Camera {
+        let camera = CameraTransform {
             view,
             proj,
             viewproj: proj * view,
@@ -72,7 +72,7 @@ impl SpectatorCamera {
         self.camera.viewproj = self.camera.proj * view;
     }
 
-    pub fn get_camera(&self) -> Camera {
+    pub fn get_transform(&self) -> CameraTransform {
         self.camera
     }
 }

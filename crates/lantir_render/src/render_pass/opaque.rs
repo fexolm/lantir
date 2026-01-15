@@ -9,7 +9,7 @@ use crate::{
     include_shader,
     render_pass::RenderPass,
     resources::resource_manager::ResourceManager,
-    scene::{Camera, Scene},
+    scene::{CameraTransform, Scene},
     world_renderer::WorldRenderer,
 };
 
@@ -38,7 +38,7 @@ impl OpaquePass {
         let push_constants = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX,
             offset: 0,
-            size: std::mem::size_of::<Camera>() as u32,
+            size: std::mem::size_of::<CameraTransform>() as u32,
         }];
 
         let pipeline_layout = PipelineLayout::new(
