@@ -16,7 +16,7 @@ mod surface;
 mod swapchain;
 
 pub use ash::vk;
-pub use barriers::{AccessType, ImageBarrier};
+pub use barriers::{AccessType, ImageBarrier, GlobalBarrier, BufferBarrier};
 pub use buffer::{Buffer, BufferCreateInfo};
 pub use command_buffer::{
     CommandBuffer, CopyBufferImageInfo, CopyImageInfo, RenderingAttachmentInfo, RenderingInfo,

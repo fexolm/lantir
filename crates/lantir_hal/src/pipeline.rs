@@ -69,7 +69,7 @@ impl ComputePipeline {
 pub struct ComputePipelineData {
     pub(crate) pipeline: vk::Pipeline,
 
-    pub(crate) layout: Arc<PipelineLayout>,
+    pub layout: Arc<PipelineLayout>,
 
     _shader: Arc<Shader>,
 }
@@ -148,7 +148,7 @@ pub struct GraphicsPipelineData {
     pub(crate) pipeline: vk::Pipeline,
 
     pub layout: Arc<PipelineLayout>,
-    shaders: [Arc<Shader>; 2],
+    _shaders: [Arc<Shader>; 2],
 }
 
 fn create_color_blend_attachment(mode: &BlendingMode) -> vk::PipelineColorBlendAttachmentState {
@@ -256,7 +256,7 @@ impl GraphicsPipelineData {
         Ok(GraphicsPipelineData {
             pipeline,
             layout: create_info.layout.clone(),
-            shaders: [
+            _shaders: [
                 create_info.vertex_shader.clone(),
                 create_info.fragment_shader.clone(),
             ],

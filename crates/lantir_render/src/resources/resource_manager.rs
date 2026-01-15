@@ -356,7 +356,7 @@ impl ResourceManager {
         &self.meta_descritor_set_layout
     }
 
-    pub fn get_index_buffer(&self) -> MappedMutexGuard<Buffer> {
+    pub fn get_index_buffer(&self) -> MappedMutexGuard<'_, Buffer> {
         let ib = self.index_buffer.lock();
         MutexGuard::map(ib, |ib: &mut GpuBuffer<u32>| &mut ib.buffer)
     }
@@ -376,7 +376,7 @@ impl ResourceManager {
         Ok(())
     }
 
-    pub fn get_global_indirect_buffer(&self) -> MappedMutexGuard<Buffer> {
+    pub fn get_global_indirect_buffer(&self) -> MappedMutexGuard<'_, Buffer> {
         let db = self.global_indirect_buffer.lock();
 
         MutexGuard::map(db, |db: &mut GpuBuffer<vk::DrawIndexedIndirectCommand>| {
@@ -539,10 +539,6 @@ impl<T: Sized + Copy> MirroredBuffer<T> {
 
     pub fn get(&self, index: usize) -> T {
         self.data[index]
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.len()
     }
 
     pub fn buffer(&self) -> &Buffer {

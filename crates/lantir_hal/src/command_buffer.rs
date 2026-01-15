@@ -428,7 +428,7 @@ pub struct RenderingAttachmentInfo<'i> {
 }
 
 impl RenderingAttachmentInfo<'_> {
-    pub fn to_vk(&self) -> vk::RenderingAttachmentInfo {
+    pub fn to_vk(&self) -> vk::RenderingAttachmentInfo<'_> {
         vk::RenderingAttachmentInfo::default()
             .image_view(self.image.get_image_view())
             .image_layout(self.layout)

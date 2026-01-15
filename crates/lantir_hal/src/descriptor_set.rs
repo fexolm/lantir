@@ -1,6 +1,6 @@
 ﻿use crate::image::Sampler;
 use crate::resource::{DeferDrop, Resource};
-use crate::{Buffer, Image, RenderEngine, UpdateFrequency};
+use crate::{Buffer, Image, RenderEngine};
 use ash::vk;
 use std::sync::Arc;
 
