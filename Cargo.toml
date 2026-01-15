@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/lib/lantir-hal",
-    "crates/bin/example", "crates/lib/lantir",
+    "crates/lantir_hal",
+    "crates/lantir_render",
+    "examples",
 ]

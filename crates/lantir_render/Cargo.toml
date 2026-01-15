@@ -1,11 +1,11 @@
 [package]
-name = "lantir"
+name = "lantir_render"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
 
 [dependencies]
-"lantir-hal" = { path = "../lantir-hal" }
+lantir_hal = { path = "../lantir_hal" }
 glam = "0.30.10"
 anyhow = "1.0.100"
 parking_lot = "0.12.5"

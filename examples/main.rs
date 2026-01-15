@@ -1,7 +1,7 @@
 ﻿use image::DynamicImage;
-use lantir::resources::{DrawItem, INVALID_RESOURCE_HANDLE, PbrMaterial, TriMesh, Vertex};
-use lantir::scene::{Camera, Scene};
-use lantir::world_renderer::{self, WorldRenderer, WorldRendererConfig};
+use lantir_render::resources::{DrawItem, INVALID_RESOURCE_HANDLE, PbrMaterial, TriMesh, Vertex};
+use lantir_render::scene::{Camera, Scene};
+use lantir_render::world_renderer::{self, WorldRenderer, WorldRendererConfig};
 use lantir_hal::{AccessType, Buffer, CopyBufferImageInfo, ImageBarrier, RenderEngine, RenderEngineConfig, Texture, TextureCreateInfo, UpdateFrequency, vk};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -186,8 +186,6 @@ fn load_gltf_draw_items(
     gltf_bytes: &[u8],
 ) -> anyhow::Result<Vec<DrawItem>> {
     let rm = world_renderer.get_resource_manager();
-    let engine = world_renderer.get_engine().clone();
-
     let gltf = gltf::Gltf::from_slice(gltf_bytes)?;
 
     // Enforce GLB-only: no external buffers via URI.
@@ -234,7 +232,7 @@ fn load_gltf_draw_items(
     }
 
     // Preload images -> GPU textures, and remember mapping.
-    let mut image_to_texture: HashMap<usize, lantir::resources::TextureHandle> = HashMap::new();
+    let mut image_to_texture: HashMap<usize, lantir_render::resources::TextureHandle> = HashMap::new();
     for img in gltf.images() {
         let texture = decode_gltf_image(&gltf, &img)?;
         let handle = rm.add_texture(texture)?;
@@ -261,8 +259,8 @@ fn load_gltf_draw_items(
         node: gltf::Node,
         gltf: &gltf::Gltf,
         parent_transform: glam::Mat4,
-        rm: &lantir::resources::resource_manager::ResourceManager,
-        image_to_texture: &HashMap<usize, lantir::resources::TextureHandle>,
+        rm: &lantir_render::resources::resource_manager::ResourceManager,
+        image_to_texture: &HashMap<usize, lantir_render::resources::TextureHandle>,
         draw_items: &mut Vec<DrawItem>,
     ) -> anyhow::Result<()> {
         let world_transform = parent_transform * node_transform(&node);
