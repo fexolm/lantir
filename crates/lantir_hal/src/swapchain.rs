@@ -36,7 +36,7 @@ impl Swapchain {
         device: &Device,
         surface: &Surface,
     ) -> anyhow::Result<Self> {
-        let loader = swapchain::Device::new(&instance, &device);
+        let loader = swapchain::Device::new(instance, device);
 
         let surface_caps = surface
             .get_physical_device_surface_capabilities(device.physical_device, surface.get_raw())?;

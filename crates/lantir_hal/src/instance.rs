@@ -29,7 +29,7 @@ impl Instance {
             let create_flags = vk::InstanceCreateFlags::default();
 
             let enabled_layers = get_enabled_layers();
-            let enabled_extensions = get_enabled_extensions(&window, debug)?;
+            let enabled_extensions = get_enabled_extensions(window, debug)?;
 
             let enabled_validation_features = [vk::ValidationFeatureEnableEXT::DEBUG_PRINTF];
 
@@ -64,7 +64,7 @@ impl Instance {
 
         Ok(Instance {
             instance,
-            entry: entry,
+            entry,
             debug_utils_loader,
             debug_callback,
         })
@@ -125,13 +125,7 @@ fn get_enabled_layers() -> Vec<*const c_char> {
 }
 
 fn get_enabled_extensions(window: &Window, debug: bool) -> anyhow::Result<Vec<*const c_char>> {
-    let mut res = ash_window::enumerate_required_extensions(
-        window
-            .display_handle()
-            .expect("Failed to get winow handle")
-            .as_raw(),
-    )?
-    .to_vec();
+    let mut res = ash_window::enumerate_required_extensions(window.display_handle().expect("Failed to get winow handle").as_raw())?.to_vec();
 
     if debug {
         res.push(debug_utils::NAME.as_ptr());

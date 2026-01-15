@@ -119,7 +119,7 @@ fn write_spv_words_rs(spv_path: &Path, out_rs: &Path) {
     let bytes =
         fs::read(spv_path).unwrap_or_else(|e| panic!("failed to read {}: {e}", spv_path.display()));
 
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         panic!(
             "SPIR-V size is not a multiple of 4: {} ({} bytes)",
             spv_path.display(),
@@ -143,7 +143,7 @@ fn write_spv_words_rs(spv_path: &Path, out_rs: &Path) {
             s.push('\n');
         }
     }
-    if words.len() % 8 != 0 {
+    if !words.len().is_multiple_of(8) {
         s.push('\n');
     }
     s.push_str("];\n");

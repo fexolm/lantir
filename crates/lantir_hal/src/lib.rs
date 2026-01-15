@@ -1,4 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::all)]
 
 mod barriers;
 mod buffer;

@@ -56,7 +56,7 @@ fn init_render_exclusive(world: &mut World) {
             debug: true,
             frames_in_flight: 2,
         };
-        RenderEngine::new(&**winit_window, &config).expect("RenderEngine::new")
+        RenderEngine::new(winit_window, &config).expect("RenderEngine::new")
     };
 
     let world_renderer = world_renderer::WorldRenderer::new(
@@ -143,10 +143,10 @@ fn main() -> anyhow::Result<()> {
         }),
         ..Default::default()
     });
-    app.add_plugins(bevy_a11y::AccessibilityPlugin::default());
+    app.add_plugins(bevy_a11y::AccessibilityPlugin);
     app.add_plugins(WinitPlugin::<bevy_winit::WakeUp>::default());
-    app.add_plugins(InputPlugin::default());
-    app.add_plugins(SpectatorCameraPlugin::default());
+    app.add_plugins(InputPlugin);
+    app.add_plugins(SpectatorCameraPlugin);
 
     app.add_systems(Update, init_render_exclusive);
 

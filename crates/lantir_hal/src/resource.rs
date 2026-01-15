@@ -6,12 +6,12 @@ pub trait DeferDrop {
     fn destroy(&mut self, engine: &RenderEngine);
 }
 
-pub struct Resource<T: DeferDrop + 'static> {
+pub struct Resource<T: DeferDrop + Send + Sync + 'static> {
     handle: Option<T>,
     pub engine: Arc<RenderEngine>,
 }
 
-impl<T: DeferDrop + 'static> Resource<T> {
+impl<T: DeferDrop + Send + Sync + 'static> Resource<T> {
     pub(crate) fn make(engine: Arc<RenderEngine>, handle: T) -> Self {
         Resource {
             handle: Some(handle),
@@ -24,7 +24,7 @@ impl<T: DeferDrop + 'static> Resource<T> {
     }
 }
 
-impl<T: DeferDrop + 'static> Deref for Resource<T> {
+impl<T: DeferDrop + Send + Sync + 'static> Deref for Resource<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -32,7 +32,7 @@ impl<T: DeferDrop + 'static> Deref for Resource<T> {
     }
 }
 
-impl<T: DeferDrop + 'static> Drop for Resource<T> {
+impl<T: DeferDrop + Send + Sync + 'static> Drop for Resource<T> {
     fn drop(&mut self) {
         let handle = self.handle.take().unwrap();
         self.engine.schedule_resource_release(handle);

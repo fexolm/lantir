@@ -110,7 +110,7 @@ impl RenderPass for OpaquePass {
         };
 
         cb.cmd_begin_rendering(
-            &renderer.get_engine(),
+            renderer.get_engine(),
             &RenderingInfo {
                 extent: renderer.draw_extent(),
                 color_attachments: &[color_att],
@@ -118,10 +118,10 @@ impl RenderPass for OpaquePass {
             },
         );
 
-        cb.cmd_bind_graphics_pipeline(&renderer.get_engine(), &self.pipeline);
+        cb.cmd_bind_graphics_pipeline(renderer.get_engine(), &self.pipeline);
 
         cb.cmd_bind_descriptor_sets(
-            &renderer.get_engine(),
+            renderer.get_engine(),
             &self.pipeline.layout,
             &[renderer.get_resource_manager().get_meta_descriptor_set()],
             vk::PipelineBindPoint::GRAPHICS,
@@ -129,7 +129,7 @@ impl RenderPass for OpaquePass {
         );
 
         cb.cmd_push_constants(
-            &renderer.get_engine(),
+            renderer.get_engine(),
             &self.pipeline.layout,
             vk::ShaderStageFlags::VERTEX,
             0,
@@ -149,7 +149,7 @@ impl RenderPass for OpaquePass {
         }
 
         if commands.is_empty() {
-            cb.cmd_end_rendering(&renderer.get_engine());
+            cb.cmd_end_rendering(renderer.get_engine());
             return Ok(());
         }
 
@@ -159,14 +159,14 @@ impl RenderPass for OpaquePass {
             * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
 
         cb.cmd_draw_indexed_indirect(
-            &renderer.get_engine(),
+            renderer.get_engine(),
             &renderer.get_resource_manager().get_global_indirect_buffer(),
             indirect_buffer_offset,
             commands.len() as u32,
             size_of::<vk::DrawIndexedIndirectCommand>() as u32,
         );
 
-        cb.cmd_end_rendering(&renderer.get_engine());
+        cb.cmd_end_rendering(renderer.get_engine());
         Ok(())
     }
 }

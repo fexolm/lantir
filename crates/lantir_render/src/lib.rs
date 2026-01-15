@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 pub mod render_pass;
 pub mod resources;
 pub mod scene;

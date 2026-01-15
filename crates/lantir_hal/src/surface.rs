@@ -20,7 +20,7 @@ impl Surface {
             None,
         )?;
 
-        let loader = surface::Instance::new(&instance.entry, &instance);
+        let loader = surface::Instance::new(&instance.entry, instance);
 
         Ok(Surface { surface, loader })
     }

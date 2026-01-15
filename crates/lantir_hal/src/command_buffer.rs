@@ -69,7 +69,7 @@ impl CommandBuffer {
     }
 
     pub fn cmd_image_barrier(&self, engine: &RenderEngine, barrier: &ImageBarrier) {
-        let (src_mask, dst_mask, barrier) = get_image_memory_barrier(&engine, barrier);
+        let (src_mask, dst_mask, barrier) = get_image_memory_barrier(engine, barrier);
 
         let barriers = [barrier];
         unsafe {

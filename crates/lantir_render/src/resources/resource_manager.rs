@@ -433,7 +433,7 @@ impl<T> GpuBuffer<T> {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | extra_usage,
                 memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                update_frequency: update_frequency,
+                update_frequency,
                 vma_flags: AllocationCreateFlags::empty(),
             },
         )?;
@@ -467,7 +467,7 @@ impl<T> GpuBuffer<T> {
         }
 
         let offset = self.num_elems as u64 * std::mem::size_of::<T>() as u64;
-        let staging_size = (data.len() * std::mem::size_of::<T>()) as u64;
+        let staging_size = std::mem::size_of_val(data) as u64;
 
         let staging_buffer = Buffer::new(
             self.engine.clone(),

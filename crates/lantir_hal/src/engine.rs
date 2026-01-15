@@ -151,7 +151,7 @@ impl RenderEngine {
                 .reset_fences(&[frame.render_command_buffer.submit_fence])?;
         }
 
-        frame.cleanup_resources(&self);
+        frame.cleanup_resources(self);
         frame.render_command_buffer.reset(self)?;
 
         Ok(frame)
@@ -183,10 +183,10 @@ impl RenderEngine {
     }
 
     pub fn acquire_swapchain_image(&self, frame: &RenderFrame) -> anyhow::Result<SwapchainImage> {
-        unsafe { self.swapchain.lock().unwrap().acquire_next_image(&frame) }
+        unsafe { self.swapchain.lock().unwrap().acquire_next_image(frame) }
     }
 
-    pub(crate) fn schedule_resource_release(&self, resource: impl DeferDrop + 'static) {
+    pub(crate) fn schedule_resource_release(&self, resource: impl DeferDrop + Send + Sync + 'static) {
         let frame_index = self.get_current_frame_index();
         self.frames[frame_index].enqueue_drop(resource);
     }
@@ -236,7 +236,7 @@ impl Drop for RenderEngine {
                 .destroy_descriptor_pool(self.descriptor_pool, None);
 
             for frame in &self.frames {
-                frame.destroy(&self);
+                frame.destroy(self);
             }
 
             self.swapchain.lock().unwrap().destroy(&self.device);

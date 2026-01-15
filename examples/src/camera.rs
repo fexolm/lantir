@@ -77,9 +77,7 @@ impl SpectatorCamera {
     }
 }
 
-#[derive(Default)]
-pub struct SpectatorCameraPlugin {
-}
+pub struct SpectatorCameraPlugin;
 
 impl Plugin for SpectatorCameraPlugin {
     fn build(&self, app: &mut App) {

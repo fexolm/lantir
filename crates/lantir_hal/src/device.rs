@@ -17,10 +17,7 @@ pub(crate) struct Device {
 
 impl Device {
     pub(crate) unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
-        let SelectedPhysicalDevice {
-            physical_device,
-            universal_family,
-        } = select_physical_device(&instance, &surface)?;
+        let SelectedPhysicalDevice { physical_device, universal_family } = select_physical_device(instance, surface)?;
 
         let device = {
             let device_extension_names_raw = [
@@ -227,16 +224,8 @@ unsafe fn select_physical_device(
                 return None;
             }
 
-            if let Some(universal_family) =
-                find_universal_queue_family(instance, surface, physical_device)
-            {
-                Some(SelectedPhysicalDevice {
-                    physical_device,
-                    universal_family,
-                })
-            } else {
-                None
-            }
+            find_universal_queue_family(instance, surface, physical_device)
+                .map(|universal_family| SelectedPhysicalDevice { physical_device, universal_family })
         })
         .expect("Couldn't find suitable device."))
 }

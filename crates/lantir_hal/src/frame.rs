@@ -8,7 +8,7 @@ pub struct RenderFrame {
     pub(crate) render_command_buffer: CommandBuffer,
     pub(crate) swapchain_acquire_semaphore: vk::Semaphore,
 
-    pub(crate) deletion_queue: Mutex<Vec<Box<dyn DeferDrop>>>,
+    pub(crate) deletion_queue: Mutex<Vec<Box<dyn DeferDrop + Send>>>,
 }
 
 impl RenderFrame {
@@ -38,7 +38,7 @@ impl RenderFrame {
         &self.render_command_buffer
     }
 
-    pub(crate) fn enqueue_drop(&self, resource: impl DeferDrop + 'static) {
+    pub(crate) fn enqueue_drop(&self, resource: impl DeferDrop + Send + Sync + 'static ) {
         let mut queue = self.deletion_queue.lock().unwrap();
         queue.push(Box::new(resource));
     }

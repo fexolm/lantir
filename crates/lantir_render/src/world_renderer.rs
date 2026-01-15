@@ -100,7 +100,7 @@ impl WorldRenderer {
     }
 
     pub fn color_target(&self) -> &Texture {
-        &*self.color_target
+        &self.color_target
     }
 
     pub fn get_engine(&self) -> &Arc<RenderEngine> {
@@ -108,7 +108,7 @@ impl WorldRenderer {
     }
 
     pub fn depth_target(&self) -> &Texture {
-        &*self.depth_target
+        &self.depth_target
     }
 
     pub fn color_format(&self) -> vk::Format {
@@ -130,8 +130,8 @@ impl WorldRenderer {
     }
 
     fn run_passes(&self, cb: &CommandBuffer, scene: &Scene) -> anyhow::Result<()> {
-        self.opaque_pass.prepare(&self, scene)?;
-        self.opaque_pass.execute(&self, scene, cb)?;
+        self.opaque_pass.prepare(self, scene)?;
+        self.opaque_pass.execute(self, scene, cb)?;
         Ok(())
     }
 
@@ -140,7 +140,7 @@ impl WorldRenderer {
 
         let swapchain_image = self
             .engine
-            .acquire_swapchain_image(&frame)
+            .acquire_swapchain_image(frame)
             .context("engine.acquire_swapchain_image")?;
 
         let cb = frame.get_render_command_buffer();
@@ -182,7 +182,7 @@ impl WorldRenderer {
 
         cb.cmd_bind_index_buffer(
             &self.engine,
-            &*self.resource_manager.get_index_buffer(),
+            &self.resource_manager.get_index_buffer(),
             vk::IndexType::UINT32,
         );
 
