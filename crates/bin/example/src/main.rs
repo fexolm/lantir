@@ -1,7 +1,9 @@
-﻿use lantir::resources::{DrawItem, INVALID_RESOURCE_HANDLE, PbrMaterial, TriMesh, Vertex};
+﻿use image::DynamicImage;
+use lantir::resources::{DrawItem, INVALID_RESOURCE_HANDLE, PbrMaterial, TriMesh, Vertex};
 use lantir::scene::{Camera, Scene};
 use lantir::world_renderer::{self, WorldRenderer, WorldRendererConfig};
-use lantir_hal::{RenderEngine, RenderEngineConfig, vk};
+use lantir_hal::{AccessType, Buffer, CopyBufferImageInfo, ImageBarrier, RenderEngine, RenderEngineConfig, Texture, TextureCreateInfo, UpdateFrequency, vk};
+use std::collections::HashMap;
 use std::time::Instant;
 use winit::event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::EventLoop;
@@ -182,11 +184,62 @@ struct App {
 fn load_gltf_draw_items(
     world_renderer: &WorldRenderer,
     gltf_bytes: &[u8],
-    external_buffers: &[(&str, &[u8])],
 ) -> anyhow::Result<Vec<DrawItem>> {
     let rm = world_renderer.get_resource_manager();
+    let engine = world_renderer.get_engine().clone();
 
     let gltf = gltf::Gltf::from_slice(gltf_bytes)?;
+
+    // Enforce GLB-only: no external buffers via URI.
+    for buffer in gltf.buffers() {
+        if matches!(buffer.source(), gltf::buffer::Source::Uri(_)) {
+            anyhow::bail!(
+                "External buffers are not supported anymore; provide a .glb with embedded BIN chunk"
+            );
+        }
+    }
+
+    fn decode_gltf_image(
+        gltf: &gltf::Gltf,
+        image: &gltf::Image,
+    ) -> anyhow::Result<DynamicImage> {
+        let bytes: Vec<u8> = match image.source() {
+            gltf::image::Source::View { view, .. } => {
+                let buffer = view.buffer();
+                let Some(blob) = gltf.blob.as_deref() else {
+                    anyhow::bail!("Missing GLB BIN blob");
+                };
+                match buffer.source() {
+                    gltf::buffer::Source::Bin => {
+                        let start = view.offset();
+                        let end = start + view.length();
+                        blob.get(start..end)
+                            .ok_or_else(|| anyhow::anyhow!("Image buffer view out of bounds"))?
+                            .to_vec()
+                    }
+                    gltf::buffer::Source::Uri(_) => {
+                        anyhow::bail!("External image buffers are not supported (GLB-only)")
+                    }
+                }
+            }
+            gltf::image::Source::Uri { uri, .. } => {
+                // For GLB-only workflow we disallow external files.
+                // If you still have a data URI, it can be supported later.
+                anyhow::bail!("Image URI is not supported (expected embedded image in .glb): {uri}")
+            }
+        };
+
+        let dyn_img = image::load_from_memory(&bytes)?;
+        Ok(dyn_img)
+    }
+
+    // Preload images -> GPU textures, and remember mapping.
+    let mut image_to_texture: HashMap<usize, lantir::resources::TextureHandle> = HashMap::new();
+    for img in gltf.images() {
+        let texture = decode_gltf_image(&gltf, &img)?;
+        let handle = rm.add_texture(texture)?;
+        image_to_texture.insert(img.index(), handle);
+    }
 
     fn node_transform(node: &gltf::Node) -> glam::Mat4 {
         match node.transform() {
@@ -207,9 +260,9 @@ fn load_gltf_draw_items(
     fn load_node(
         node: gltf::Node,
         gltf: &gltf::Gltf,
-        external_buffers: &[(&str, &[u8])],
         parent_transform: glam::Mat4,
         rm: &lantir::resources::resource_manager::ResourceManager,
+        image_to_texture: &HashMap<usize, lantir::resources::TextureHandle>,
         draw_items: &mut Vec<DrawItem>,
     ) -> anyhow::Result<()> {
         let world_transform = parent_transform * node_transform(&node);
@@ -218,9 +271,7 @@ fn load_gltf_draw_items(
             for primitive in mesh.primitives() {
                 let reader = primitive.reader(|buffer| match buffer.source() {
                     gltf::buffer::Source::Bin => gltf.blob.as_deref(),
-                    gltf::buffer::Source::Uri(uri) => external_buffers
-                        .iter()
-                        .find_map(|(name, bytes)| (*name == uri).then_some(*bytes)),
+                    gltf::buffer::Source::Uri(_uri) => None,
                 });
 
                 let Some(positions) = reader.read_positions() else {
@@ -258,9 +309,21 @@ fn load_gltf_draw_items(
                 let pbr = primitive.material().pbr_metallic_roughness();
                 let base_color = glam::Vec4::from_array(pbr.base_color_factor());
 
+                let (albedo_tex, albedo_sampler) = if let Some(info) = pbr.base_color_texture() {
+                    let img_index = info.texture().source().index();
+                    let handle = image_to_texture
+                        .get(&img_index)
+                        .copied()
+                        .unwrap_or(INVALID_RESOURCE_HANDLE);
+                    // ResourceManager seeds sampler[0] with a default linear sampler.
+                    (handle, 0)
+                } else {
+                    (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
+                };
+
                 let material_handle = rm.add_material(PbrMaterial {
-                    albedo_tex: INVALID_RESOURCE_HANDLE,
-                    albedo_sampler: INVALID_RESOURCE_HANDLE,
+                    albedo_tex,
+                    albedo_sampler,
                     normal_tex: INVALID_RESOURCE_HANDLE,
                     normal_sampler: INVALID_RESOURCE_HANDLE,
                     metallic_roughness_tex: INVALID_RESOURCE_HANDLE,
@@ -285,9 +348,9 @@ fn load_gltf_draw_items(
             load_node(
                 child,
                 gltf,
-                external_buffers,
                 world_transform,
                 rm,
+                image_to_texture,
                 draw_items,
             )?;
         }
@@ -301,9 +364,9 @@ fn load_gltf_draw_items(
             load_node(
                 node,
                 &gltf,
-                external_buffers,
                 glam::Mat4::IDENTITY,
                 rm,
+                &image_to_texture,
                 &mut draw_items,
             )?;
         }
@@ -344,8 +407,7 @@ impl App {
 
         let draw_items = load_gltf_draw_items(
             &world_renderer,
-            include_bytes!("assets/scene.gltf"),
-            &[("scene.bin", include_bytes!("assets/scene.bin") as &[u8])],
+            include_bytes!("assets/track.glb"),
         )?;
 
         Ok(App {

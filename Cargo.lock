@@ -468,6 +468,7 @@ dependencies = [
  "egui",
  "glam",
  "gltf",
+ "image",
  "lantir",
  "lantir-hal",
  "shaderc",
@@ -701,6 +702,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glam",
+ "image",
  "lantir-hal",
  "parking_lot",
 ]

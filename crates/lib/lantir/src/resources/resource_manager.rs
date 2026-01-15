@@ -3,8 +3,7 @@ use std::{marker::PhantomData, sync::Arc};
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
 use lantir_hal::{
-    AllocationCreateFlags, Buffer, DescriptorSet, DescriptorSetLayout, RenderEngine, Sampler,
-    SamplerInfo, Texture, UpdateFrequency, vk,
+    AccessType, AllocationCreateFlags, Buffer, CopyBufferImageInfo, DescriptorSet, DescriptorSetLayout, ImageBarrier, RenderEngine, Sampler, SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency, vk
 };
 
 use crate::resources::*;
@@ -25,6 +24,8 @@ pub struct ResourceManager {
     textures: Mutex<Vec<Texture>>,
 
     uploaded_meshes: Mutex<Vec<UploadedMesh>>,
+
+    engine: Arc<RenderEngine>,
 }
 
 impl ResourceManager {
@@ -156,6 +157,7 @@ impl ResourceManager {
             items_buffer: Mutex::new(items_buffer),
             global_indirect_buffer: Mutex::new(global_indirect_buffer),
             uploaded_meshes,
+            engine,
         })
     }
 
@@ -179,12 +181,112 @@ impl ResourceManager {
         Ok(handle)
     }
 
-    pub fn add_texture(&self, texture: Texture) -> anyhow::Result<TextureHandle> {
+    fn upload_rgba8_texture(
+        &self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        format: vk::Format,
+    ) -> anyhow::Result<Texture> {
+        if width == 0 || height == 0 {
+            anyhow::bail!("Invalid texture extent: {}x{}", width, height);
+        }
+
+        let staging_size = rgba.len() as u64;
+        let staging_buffer = Buffer::new(
+            self.engine.clone(),
+            &lantir_hal::BufferCreateInfo {
+                size: staging_size,
+                usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                update_frequency: UpdateFrequency::Static,
+                vma_flags: lantir_hal::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            },
+        )?;
+
+        unsafe {
+            let staging_map = staging_buffer.map()?;
+            std::ptr::copy_nonoverlapping(rgba.as_ptr(), staging_map, rgba.len());
+            staging_buffer.unmap();
+        }
+
+        let texture = Texture::new(
+            self.engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::Static,
+                format,
+                extent: vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                },
+                usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            },
+        )?;
+
+        self.engine.immediate_submit(|cb| {
+            cb.cmd_image_barrier(
+                &self.engine,
+                &ImageBarrier {
+                    previous_accesses: &[AccessType::Nothing],
+                    next_accesses: &[AccessType::TransferWrite],
+                    previous_layout: vk::ImageLayout::UNDEFINED,
+                    next_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    image: &texture,
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                },
+            );
+
+            cb.cmd_copy_buffer_to_image(
+                &self.engine,
+                &CopyBufferImageInfo {
+                    buffer: &staging_buffer,
+                    image: &texture,
+                    image_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    image_aspect_mask: vk::ImageAspectFlags::COLOR,
+                    image_extent: vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    },
+                },
+            );
+
+            cb.cmd_image_barrier(
+                &self.engine,
+                &ImageBarrier {
+                    previous_accesses: &[AccessType::TransferWrite],
+                    next_accesses: &[AccessType::AnyShaderReadSampledImageOrUniformTexelBuffer],
+                    previous_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    next_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    image: &texture,
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                },
+            );
+        })?;
+
+        Ok(texture)
+    }
+
+    pub fn add_texture(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
         let mut textures = self.textures.lock();
 
         if textures.len() >= MAX_TEXTURES {
             anyhow::bail!("Exceeded maximum number of textures");
         }
+
+        let rgba8 = image.to_rgba8();
+
+        let texture = self.upload_rgba8_texture(
+            &rgba8,
+            rgba8.width(),
+            rgba8.height(),
+            vk::Format::R8G8B8A8_UNORM,
+        )?;
 
         let handle = textures.len() as TextureHandle;
         textures.push(texture);
