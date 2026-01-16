@@ -186,7 +186,10 @@ impl RenderEngine {
         unsafe { self.swapchain.lock().unwrap().acquire_next_image(frame) }
     }
 
-    pub(crate) fn schedule_resource_release(&self, resource: impl DeferDrop + Send + Sync + 'static) {
+    pub(crate) fn schedule_resource_release(
+        &self,
+        resource: impl DeferDrop + Send + Sync + 'static,
+    ) {
         let frame_index = self.get_current_frame_index();
         self.frames[frame_index].enqueue_drop(resource);
     }

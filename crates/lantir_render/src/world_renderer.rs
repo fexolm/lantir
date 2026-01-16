@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
+use bevy_ecs::resource::Resource;
 use lantir_hal::{
     AccessType, CommandBuffer, CopyImageInfo, ImageBarrier, RenderEngine, Texture,
     TextureCreateInfo, UpdateFrequency, vk,
@@ -17,6 +18,7 @@ pub struct WorldRendererConfig {
     pub window_extent: vk::Extent2D,
 }
 
+#[derive(Resource)]
 pub struct WorldRenderer {
     engine: Arc<RenderEngine>,
     resource_manager: Arc<ResourceManager>,

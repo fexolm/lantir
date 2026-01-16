@@ -4,5 +4,6 @@ members = [
     "crates/lantir_hal",
     "crates/lantir_render",
     "crates/lantir_gltf",
+    "crates/lantir_bevy",
     "examples",
 ]

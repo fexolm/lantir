@@ -7,17 +7,20 @@ edition = "2024"
 lantir_render = { path = "../crates/lantir_render" }
 lantir_hal = { path = "../crates/lantir_hal" }
 lantir_gltf = { path = "../crates/lantir_gltf" }
+lantir_bevy = { path = "../crates/lantir_bevy" }
 
-bevy_app = "0.15.3"
-bevy_ecs = "0.15.3"
-bevy_input = "0.15.3"
-bevy_a11y = "0.15.3"
-bevy_window = "0.15.3"
-bevy_winit = "0.15.3"
+bevy_app = "0.18.0"
+bevy_ecs = { version = "0.18.0", features = ["debug"] }
+bevy_input = "0.18.0"
+bevy_a11y = "0.18.0"
+bevy_window = "0.18.0"
+bevy_winit = "0.18.0"
 
 winit = { version = "0.30", features = ["rwh_06"] }
 anyhow = "1.0.100"
 gltf = "1.4.1"
-image = { version = "0.25.6", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25.6", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
 glam = "0.30.10"
-

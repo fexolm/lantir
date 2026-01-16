@@ -1,0 +1,19 @@
+[package]
+name = "lantir_bevy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lantir_render = { path = "../lantir_render" }
+
+bevy_time = "0.18.0"
+bevy_diagnostic = "0.18.0"
+bevy_ecs = { version = "0.18.0", features = ["debug"] }
+bevy_app = "0.18.0"
+bevy_window = "0.18.0"
+bevy_winit = "0.18.0"
+bevy_a11y = "0.18.0"
+bevy_input = "0.18.0"
+bevy_log = "0.18.0"
+
+[build-dependencies]

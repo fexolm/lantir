@@ -1,5 +1,6 @@
 #![warn(clippy::all)]
 
+pub mod bevy;
 pub mod render_pass;
 pub mod resources;
 pub mod scene;
