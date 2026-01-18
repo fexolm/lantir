@@ -115,6 +115,7 @@ impl DeferDrop for ComputePipelineData {
 pub enum BlendingMode {
     AlphaBlend,
     Additive,
+    NoBlend,
 }
 
 pub struct GraphicsPipelineCreateInfo<'i> {
@@ -153,7 +154,6 @@ pub struct GraphicsPipelineData {
 
 fn create_color_blend_attachment(mode: &BlendingMode) -> vk::PipelineColorBlendAttachmentState {
     let blend_attachment = vk::PipelineColorBlendAttachmentState::default()
-        .blend_enable(true)
         .color_write_mask(vk::ColorComponentFlags::RGBA)
         .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
         .color_blend_op(vk::BlendOp::ADD)
@@ -162,11 +162,14 @@ fn create_color_blend_attachment(mode: &BlendingMode) -> vk::PipelineColorBlendA
         .alpha_blend_op(vk::BlendOp::ADD);
 
     match mode {
-        BlendingMode::AlphaBlend => {
-            blend_attachment.dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        }
+        BlendingMode::AlphaBlend => blend_attachment
+            .blend_enable(true)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA),
 
-        BlendingMode::Additive => blend_attachment.dst_color_blend_factor(vk::BlendFactor::ONE),
+        BlendingMode::Additive => blend_attachment
+            .blend_enable(true)
+            .dst_color_blend_factor(vk::BlendFactor::ONE),
+        BlendingMode::NoBlend => blend_attachment.blend_enable(false),
     }
 }
 

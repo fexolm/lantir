@@ -26,7 +26,7 @@ fn load_scene_system(world_renderer: Res<WorldRenderer>, mut commands: Commands)
     load_gltf(
         &mut commands,
         &*world_renderer,
-        include_bytes!("../assets/track.glb"),
+        include_bytes!("../assets/drift_track.glb"),
     )
     .expect("load_gltf");
     commands.insert_resource(SceneLoaded);

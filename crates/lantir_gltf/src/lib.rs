@@ -4,11 +4,12 @@ use anyhow::Context;
 use bevy_ecs::prelude::{Commands, Entity};
 use bevy_transform::components::Transform;
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
+use gltf::material::AlphaMode;
 use lantir_render::bevy::components::{Material as BevyMaterial, Mesh as BevyMesh};
 use lantir_render::resources::resource_manager::ResourceManager;
 use lantir_render::resources::{
-    INVALID_RESOURCE_HANDLE, MaterialHandle, MeshHandle, PbrMaterial, TextureHandle, TriMesh,
-    Vertex,
+    INVALID_RESOURCE_HANDLE, MaterialHandle, MeshHandle, PbrBlendMode, PbrMaterial, TextureHandle,
+    TriMesh, Vertex,
 };
 use lantir_render::world_renderer::WorldRenderer;
 
@@ -232,6 +233,20 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
         };
 
+        let blend_mode = match material.alpha_mode() {
+            AlphaMode::Blend => PbrBlendMode::Transparent,
+            AlphaMode::Opaque => PbrBlendMode::Opaque,
+            AlphaMode::Mask => PbrBlendMode::Masked,
+        };
+
+        let alpha_cutoff = if let Some(cutoff) = material.alpha_cutoff() {
+            cutoff
+        } else if material.alpha_mode() == AlphaMode::Mask {
+            0.5
+        } else {
+            0.
+        };
+
         rm.add_material(PbrMaterial {
             albedo_tex,
             albedo_sampler,
@@ -245,6 +260,8 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             emissive_color: Vec3::ZERO,
             metallness: pbr.metallic_factor(),
             roughness: pbr.roughness_factor(),
+            blend_mode,
+            alpha_cutoff,
         })
         .context("resource_manager.add_material")
     }

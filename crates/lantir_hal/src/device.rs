@@ -17,7 +17,10 @@ pub(crate) struct Device {
 
 impl Device {
     pub(crate) unsafe fn new(instance: &Instance, surface: &Surface) -> anyhow::Result<Self> {
-        let SelectedPhysicalDevice { physical_device, universal_family } = select_physical_device(instance, surface)?;
+        let SelectedPhysicalDevice {
+            physical_device,
+            universal_family,
+        } = select_physical_device(instance, surface)?;
 
         let device = {
             let device_extension_names_raw = [
@@ -39,6 +42,7 @@ impl Device {
                 .buffer_device_address(true);
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
                 .synchronization2(true)
+                .shader_demote_to_helper_invocation(true)
                 .dynamic_rendering(true);
 
             let mut all_features = features2
@@ -224,8 +228,12 @@ unsafe fn select_physical_device(
                 return None;
             }
 
-            find_universal_queue_family(instance, surface, physical_device)
-                .map(|universal_family| SelectedPhysicalDevice { physical_device, universal_family })
+            find_universal_queue_family(instance, surface, physical_device).map(
+                |universal_family| SelectedPhysicalDevice {
+                    physical_device,
+                    universal_family,
+                },
+            )
         })
         .expect("Couldn't find suitable device."))
 }

@@ -28,4 +28,6 @@ struct PbrMaterial
     float3 emissive_color;
     float metallness;
     float roughness;
+    uint1 blend_mode;
+    float alpha_cutoff;
 };

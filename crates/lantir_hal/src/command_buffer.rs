@@ -425,6 +425,7 @@ pub struct RenderingAttachmentInfo<'i> {
     pub image: &'i dyn Image,
     pub layout: vk::ImageLayout,
     pub clear_value: vk::ClearValue,
+    pub load_op: vk::AttachmentLoadOp,
 }
 
 impl RenderingAttachmentInfo<'_> {
@@ -432,7 +433,7 @@ impl RenderingAttachmentInfo<'_> {
         vk::RenderingAttachmentInfo::default()
             .image_view(self.image.get_image_view())
             .image_layout(self.layout)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .load_op(self.load_op)
             .store_op(vk::AttachmentStoreOp::STORE)
             .clear_value(self.clear_value)
     }

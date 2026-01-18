@@ -9,8 +9,6 @@ struct Push
 
 [[vk::push_constant]] ConstantBuffer<Push> pc;
 
-
-
 [[vk::binding(0, 0)]] StructuredBuffer<Vertex> vb;
 [[vk::binding(1, 0)]] StructuredBuffer<PbrMaterial> materials;
 [[vk::binding(2, 0)]] Texture2D textures[1024];
@@ -62,6 +60,11 @@ float4 ps_main(V2F input) : SV_Target0
             int sampIndex = clamp((int)albedoSamplerId, 0, 1023);
             base *= textures[texIndex].Sample(samplers[sampIndex], input.uv);
         }
+
+        if(base.a < mat.alpha_cutoff) {
+            discard;
+        }
+
     }
 
     return base;

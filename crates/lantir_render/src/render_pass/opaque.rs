@@ -61,7 +61,7 @@ impl OpaquePass {
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: true,
                 depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
-                blending_mode: BlendingMode::AlphaBlend,
+                blending_mode: BlendingMode::NoBlend,
             },
         )?;
 
@@ -94,6 +94,7 @@ impl RenderPass for OpaquePass {
                 cv.color.float32 = [0.0, 0.0, 0.0, 1.0];
                 cv
             },
+            load_op: vk::AttachmentLoadOp::CLEAR,
         };
 
         let depth_att = RenderingAttachmentInfo {
@@ -107,6 +108,7 @@ impl RenderPass for OpaquePass {
                 };
                 cv
             },
+            load_op: vk::AttachmentLoadOp::CLEAR,
         };
 
         cb.cmd_begin_rendering(
@@ -138,6 +140,12 @@ impl RenderPass for OpaquePass {
 
         let mut commands = Vec::with_capacity(scene.draw_items.len());
         for (i, item) in scene.draw_items.iter().enumerate() {
+            let mat = rm.get_material(item.material);
+
+            if mat.is_transparent() {
+                continue;
+            }
+
             let mesh = rm.get_mesh(item.mesh);
             commands.push(vk::DrawIndexedIndirectCommand {
                 index_count: mesh.index_count,
