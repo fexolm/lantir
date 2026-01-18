@@ -5,39 +5,30 @@ use bevy_ecs::prelude::*;
 use bevy_winit::WinitSettings;
 use camera::SpectatorCameraPlugin;
 use lantir_bevy::LantirDefaultPlugins;
-use lantir_render::bevy::components::{Material, Mesh, Transform};
-use lantir_render::resources::INVALID_RESOURCE_HANDLE;
 use lantir_render::world_renderer::WorldRenderer;
 
 #[derive(Resource)]
 struct SceneLoaded;
 
-fn load_gltf_draw_items(
+fn load_gltf(
     commands: &mut Commands,
     world_renderer: &WorldRenderer,
     gltf_bytes: &[u8],
 ) -> anyhow::Result<()> {
     let scene = lantir_gltf::load_gltf(world_renderer, gltf_bytes)?;
 
-    for node in scene.nodes {
-        let Some(mesh) = node.mesh else {
-            continue;
-        };
-        let material = node.material.unwrap_or(INVALID_RESOURCE_HANDLE);
-
-        commands.spawn((Mesh(mesh), Material(material), Transform(node.transform)));
-    }
+    scene.spawn(commands);
 
     Ok(())
 }
 
 fn load_scene_system(world_renderer: Res<WorldRenderer>, mut commands: Commands) {
-    load_gltf_draw_items(
+    load_gltf(
         &mut commands,
         &*world_renderer,
         include_bytes!("../assets/track.glb"),
     )
-    .expect("load_gltf_draw_items");
+    .expect("load_gltf");
     commands.insert_resource(SceneLoaded);
 }
 

@@ -1,11 +1,15 @@
 #![warn(clippy::all)]
 
 use anyhow::Context;
+use bevy_ecs::prelude::{Commands, Entity};
+use bevy_transform::components::Transform;
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
-use lantir_render::resources::{
-    MaterialHandle, MeshHandle, PbrMaterial, TextureHandle, TriMesh, Vertex, INVALID_RESOURCE_HANDLE,
-};
+use lantir_render::bevy::components::{Material as BevyMaterial, Mesh as BevyMesh};
 use lantir_render::resources::resource_manager::ResourceManager;
+use lantir_render::resources::{
+    INVALID_RESOURCE_HANDLE, MaterialHandle, MeshHandle, PbrMaterial, TextureHandle, TriMesh,
+    Vertex,
+};
 use lantir_render::world_renderer::WorldRenderer;
 
 pub struct GltfScene {
@@ -17,11 +21,91 @@ pub struct GltfNode {
     pub children: Vec<usize>,
     pub mesh: Option<MeshHandle>,
     pub material: Option<MaterialHandle>,
-    pub transform: Mat4,
+    pub transform: Transform,
+}
+
+impl GltfScene {
+    /// Spawns the scene into the given Bevy world as an entity hierarchy.
+    ///
+    /// Returns the root entities.
+    pub fn spawn(&self, commands: &mut Commands) -> Vec<Entity> {
+        let mut is_child = vec![false; self.nodes.len()];
+        for node in &self.nodes {
+            for &c in &node.children {
+                if let Some(slot) = is_child.get_mut(c) {
+                    *slot = true;
+                }
+            }
+        }
+
+        let mut roots = Vec::new();
+        for (i, node) in self.nodes.iter().enumerate() {
+            if is_child[i] {
+                continue;
+            }
+            roots.push(node.spawn_at(i, commands, &self.nodes));
+        }
+        roots
+    }
+}
+
+impl GltfNode {
+    /// Spawns this node (and its children) into the given Bevy world as an entity hierarchy.
+    ///
+    /// The node must come from the provided `nodes` slice (typically `scene.nodes`).
+    pub fn spawn(&self, commands: &mut Commands, nodes: &[GltfNode]) -> Entity {
+        let idx = nodes
+            .iter()
+            .position(|n| std::ptr::eq(n, self))
+            .expect("GltfNode::spawn: node not found in provided slice");
+        self.spawn_at(idx, commands, nodes)
+    }
+
+    fn spawn_at(&self, idx: usize, commands: &mut Commands, nodes: &[GltfNode]) -> Entity {
+        let material = self.material.unwrap_or(INVALID_RESOURCE_HANDLE);
+
+        let root_ent = if let Some(mesh) = self.mesh {
+            commands
+                .spawn((BevyMesh(mesh), BevyMaterial(material), self.transform))
+                .id()
+        } else {
+            commands.spawn((self.transform,)).id()
+        };
+
+        let mut stack: Vec<(Entity, usize)> = vec![(root_ent, idx)];
+        while let Some((parent_ent, node_idx)) = stack.pop() {
+            let node = &nodes[node_idx];
+            if node.children.is_empty() {
+                continue;
+            }
+
+            // Clone indices so we can move into the closure.
+            let child_indices = node.children.clone();
+            let mut immediate: Vec<(Entity, usize)> = Vec::with_capacity(child_indices.len());
+
+            commands.entity(parent_ent).with_children(|parent| {
+                for ci in child_indices {
+                    let child = &nodes[ci];
+                    let material = child.material.unwrap_or(INVALID_RESOURCE_HANDLE);
+                    let ent = if let Some(mesh) = child.mesh {
+                        parent
+                            .spawn((BevyMesh(mesh), BevyMaterial(material), child.transform))
+                            .id()
+                    } else {
+                        parent.spawn((child.transform,)).id()
+                    };
+                    immediate.push((ent, ci));
+                }
+            });
+
+            stack.extend(immediate);
+        }
+
+        root_ent
+    }
 }
 
 pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::Result<GltfScene> {
-
     fn node_local_transform(node: &gltf::Node) -> Mat4 {
         match node.transform() {
             gltf::scene::Transform::Matrix { matrix } => Mat4::from_cols_array_2d(&matrix),
@@ -38,7 +122,10 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         }
     }
 
-    fn decode_gltf_image(gltf: &gltf::Gltf, image: &gltf::Image) -> anyhow::Result<image::DynamicImage> {
+    fn decode_gltf_image(
+        gltf: &gltf::Gltf,
+        image: &gltf::Image,
+    ) -> anyhow::Result<image::DynamicImage> {
         let bytes: Vec<u8> = match image.source() {
             gltf::image::Source::View { view, .. } => {
                 let buffer = view.buffer();
@@ -73,13 +160,19 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             let idx = gltf_img.index();
             let decoded = decode_gltf_image(gltf, &gltf_img)
                 .with_context(|| format!("decode glTF image #{idx}"))?;
-            let handle = rm.add_texture(decoded).with_context(|| format!("upload glTF image #{idx}"))?;
+            let handle = rm
+                .add_texture(decoded)
+                .with_context(|| format!("upload glTF image #{idx}"))?;
             image_to_texture.insert(idx, handle);
         }
         Ok(image_to_texture)
     }
 
-    fn create_primitive_mesh(rm: &ResourceManager, gltf: &gltf::Gltf, primitive: &gltf::Primitive) -> anyhow::Result<MeshHandle> {
+    fn create_primitive_mesh(
+        rm: &ResourceManager,
+        gltf: &gltf::Gltf,
+        primitive: &gltf::Primitive,
+    ) -> anyhow::Result<MeshHandle> {
         let reader = primitive.reader(|buffer| match buffer.source() {
             gltf::buffer::Source::Bin => gltf.blob.as_deref(),
             gltf::buffer::Source::Uri(_) => None,
@@ -174,16 +267,21 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             children: Vec::new(),
             mesh: None,
             material: None,
-            transform: world,
+            transform: Transform::from_matrix(local),
         });
 
         // If node has a mesh with primitives, represent each primitive as a child node with identity transform.
         if let Some(mesh) = node.mesh() {
             for (prim_i, primitive) in mesh.primitives().enumerate() {
-                let mesh_handle = create_primitive_mesh(rm, gltf, &primitive)
-                    .with_context(|| format!("create mesh for node '{base_name}' primitive {prim_i}"))?;
-                let mat_handle = create_primitive_material(rm, image_to_texture, &primitive.material())
-                    .with_context(|| format!("create material for node '{base_name}' primitive {prim_i}"))?;
+                let mesh_handle =
+                    create_primitive_mesh(rm, gltf, &primitive).with_context(|| {
+                        format!("create mesh for node '{base_name}' primitive {prim_i}")
+                    })?;
+                let mat_handle =
+                    create_primitive_material(rm, image_to_texture, &primitive.material())
+                        .with_context(|| {
+                            format!("create material for node '{base_name}' primitive {prim_i}")
+                        })?;
 
                 let prim_index = nodes.len();
                 let prim_name = if base_name.is_empty() {
@@ -196,7 +294,7 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
                     children: Vec::new(),
                     mesh: Some(mesh_handle),
                     material: Some(mat_handle),
-                    transform: world,
+                    transform: Transform::IDENTITY,
                 });
                 nodes[this_index].children.push(prim_index);
             }

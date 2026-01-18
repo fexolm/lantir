@@ -4,6 +4,7 @@ use bevy_diagnostic::FrameCountPlugin;
 use bevy_input::InputPlugin;
 use bevy_log::LogPlugin;
 use bevy_time::TimePlugin;
+use bevy_transform::TransformPlugin;
 use bevy_window::{Window, WindowPlugin, WindowResolution};
 use bevy_winit::WinitPlugin;
 use lantir_render::bevy::plugins::RenderPlugin;
@@ -32,6 +33,7 @@ impl PluginGroup for LantirDefaultPlugins {
             .add(TaskPoolPlugin::default())
             .add(FrameCountPlugin)
             .add(TimePlugin)
+            .add(TransformPlugin::default())
             // debug plugins
             .add(LogPlugin::default())
     }

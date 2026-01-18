@@ -17,5 +17,6 @@ bevy_app = "0.18.0"
 bevy_window = "0.18.0"
 bevy_winit = "0.18.0"
 bevy_ecs = { version = "0.18.0", features = ["debug"] }
+bevy_transform = "0.18.0"
 
 [build-dependencies]

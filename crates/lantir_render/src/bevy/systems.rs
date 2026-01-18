@@ -5,12 +5,13 @@ use bevy_ecs::{
     system::{Query, ResMut},
     world::World,
 };
+use bevy_transform::components::GlobalTransform;
 use bevy_window::{PrimaryWindow, Window, WindowResized};
 use bevy_winit::WINIT_WINDOWS;
 use lantir_hal::{RenderEngine, RenderEngineConfig, vk};
 
 use crate::{
-    bevy::components::{Camera, Material, Mesh, Transform},
+    bevy::components::{Camera, Material, Mesh},
     world_renderer::{WorldRenderer, WorldRendererConfig},
 };
 
@@ -69,20 +70,19 @@ pub fn init_world_renderer_system(world: &mut World) {
 
 pub fn render_system(
     mut world_renderer: ResMut<WorldRenderer>,
-    query: Query<(&Mesh, &Material, &Transform)>,
+    query: Query<(&Mesh, &Material, &GlobalTransform)>,
     camera_query: Query<&Camera>,
 ) {
     let draw_items = query
         .iter()
-        .map(
-            |(&Mesh(mesh), &Material(material), &Transform(transform))| {
-                crate::resources::DrawItem {
-                    mesh,
-                    material,
-                    transform,
-                }
-            },
-        )
+        .map(|(&Mesh(mesh), &Material(material), global_transform)| {
+            let transform: glam::Mat4 = global_transform.to_matrix();
+            crate::resources::DrawItem {
+                mesh,
+                material,
+                transform,
+            }
+        })
         .collect::<Vec<_>>();
 
     let Ok(&Camera(camera)) = camera_query.single() else {

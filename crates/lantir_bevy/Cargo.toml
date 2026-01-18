@@ -15,5 +15,6 @@ bevy_winit = "0.18.0"
 bevy_a11y = "0.18.0"
 bevy_input = "0.18.0"
 bevy_log = "0.18.0"
+bevy_transform = "0.18.0"
 
 [build-dependencies]
