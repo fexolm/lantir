@@ -118,10 +118,17 @@ pub enum BlendingMode {
     NoBlend,
 }
 
+pub struct Specialization<'i> {
+    pub map_entries: &'i [vk::SpecializationMapEntry],
+    pub data: &'i [u8],
+}
+
 pub struct GraphicsPipelineCreateInfo<'i> {
     pub vertex_shader: &'i Arc<Shader>,
     pub fragment_shader: &'i Arc<Shader>,
     pub layout: &'i Arc<PipelineLayout>,
+    pub vertex_specialization: Option<Specialization<'i>>,
+    pub fragment_specialization: Option<Specialization<'i>>,
     pub topology: vk::PrimitiveTopology,
     pub polygon_mode: vk::PolygonMode,
     pub cull_mode: vk::CullModeFlags,
@@ -219,16 +226,36 @@ impl GraphicsPipelineData {
 
         let color_attachment_formats = [create_info.color_attachment_format];
 
-        let shader_stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(create_info.vertex_shader.shader)
-                .name(c"vs_main"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(create_info.fragment_shader.shader)
-                .name(c"ps_main"),
-        ];
+        let vs_spec_info = create_info.vertex_specialization.as_ref().map(|spec| {
+            vk::SpecializationInfo::default()
+                .map_entries(spec.map_entries)
+                .data(spec.data)
+        });
+        let fs_spec_info = create_info.fragment_specialization.as_ref().map(|spec| {
+            vk::SpecializationInfo::default()
+                .map_entries(spec.map_entries)
+                .data(spec.data)
+        });
+
+        let mut vs_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(create_info.vertex_shader.shader)
+            .name(c"vs_main");
+
+        if let Some(spec) = &vs_spec_info {
+            vs_stage = vs_stage.specialization_info(spec);
+        }
+
+        let mut fs_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(create_info.fragment_shader.shader)
+            .name(c"ps_main");
+
+        if let Some(spec) = &fs_spec_info {
+            fs_stage = fs_stage.specialization_info(spec);
+        }
+
+        let shader_stages = [vs_stage, fs_stage];
 
         let mut render_info = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&color_attachment_formats)

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{mem::size_of, sync::Arc};
 
 use lantir_hal::{
     BlendingMode, CommandBuffer, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout,
@@ -8,32 +8,28 @@ use lantir_hal::{
 use crate::{
     include_shader,
     render_pass::{DynamicConstants, RenderPass},
-    resources::resource_manager::ResourceManager,
+    resources::{PbrBlendMode, resource_manager::ResourceManager},
     scene::Scene,
     world_renderer::WorldRenderer,
 };
 
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct GPUDrawPushConstants {
-    pub render_matrix: glam::Mat4,
-}
-
-pub struct TransparentPass {
+pub struct PbrPass {
+    blend_mode: PbrBlendMode,
     pipeline: GraphicsPipeline,
     color_target: Arc<Texture>,
     depth_target: Arc<Texture>,
 }
 
-impl TransparentPass {
+impl PbrPass {
     pub fn new(
         engine: &Arc<RenderEngine>,
         resource_manager: &Arc<ResourceManager>,
         color_format: vk::Format,
         color_target: Arc<Texture>,
         depth_target: Arc<Texture>,
+        blend_mode: PbrBlendMode,
     ) -> anyhow::Result<Self> {
-        let shader = Shader::new_u32(engine.clone(), include_shader!("transparent.hlsl"))?;
+        let shader = Shader::new_u32(engine.clone(), include_shader!("pbr.hlsl"))?;
 
         let push_constants = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
@@ -47,25 +43,48 @@ impl TransparentPass {
             &push_constants,
         )?;
 
+        // Specialization constant 0: enable alpha-test discard.
+        // 0 for Opaque/Transparent, 1 for Masked.
+        let spec_map_entries = [vk::SpecializationMapEntry {
+            constant_id: 0,
+            offset: 0,
+            size: std::mem::size_of::<u32>(),
+        }];
+        let spec_value: u32 = if blend_mode == PbrBlendMode::Masked {
+            1
+        } else {
+            0
+        };
+        let spec_data = spec_value.to_le_bytes();
+
         let pipeline = GraphicsPipeline::new(
             engine.clone(),
             &GraphicsPipelineCreateInfo {
                 vertex_shader: &shader,
                 fragment_shader: &shader,
                 layout: &pipeline_layout,
+                vertex_specialization: None,
+                fragment_specialization: Some(lantir_hal::Specialization {
+                    map_entries: &spec_map_entries,
+                    data: &spec_data,
+                }),
                 topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,
                 front_face: vk::FrontFace::CLOCKWISE,
                 color_attachment_format: color_format,
                 depth_format: vk::Format::D32_SFLOAT,
-                enable_depth_write: false,
+                enable_depth_write: blend_mode != PbrBlendMode::Transparent,
                 depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
-                blending_mode: BlendingMode::AlphaBlend,
+                blending_mode: match blend_mode {
+                    PbrBlendMode::Opaque | PbrBlendMode::Masked => BlendingMode::NoBlend,
+                    PbrBlendMode::Transparent => BlendingMode::AlphaBlend,
+                },
             },
         )?;
 
         Ok(Self {
+            blend_mode,
             pipeline,
             color_target,
             depth_target,
@@ -73,9 +92,13 @@ impl TransparentPass {
     }
 }
 
-impl RenderPass for TransparentPass {
+impl RenderPass for PbrPass {
     fn name(&self) -> &'static str {
-        "TransparentPass"
+        match self.blend_mode {
+            PbrBlendMode::Opaque => "PbrPass::Opaque",
+            PbrBlendMode::Masked => "PbrPass::Masked",
+            PbrBlendMode::Transparent => "PbrPass::Transparent",
+        }
     }
 
     fn execute(
@@ -121,7 +144,6 @@ impl RenderPass for TransparentPass {
         );
 
         cb.cmd_bind_graphics_pipeline(renderer.get_engine(), &self.pipeline);
-
         cb.cmd_bind_descriptor_sets(
             renderer.get_engine(),
             &self.pipeline.layout,
@@ -135,7 +157,6 @@ impl RenderPass for TransparentPass {
             inv_viewproj: scene.camera.inv_viewproj,
             camera_pos: scene.camera.camera_pos,
         };
-
         cb.cmd_push_constants(
             renderer.get_engine(),
             &self.pipeline.layout,
@@ -144,34 +165,39 @@ impl RenderPass for TransparentPass {
             &push,
         );
 
-        let mut transparent_list: Vec<(usize, f32)> = Vec::new();
-        for (i, item) in scene.draw_items.iter().enumerate() {
-            let mat = rm.get_material(item.material);
-            if !mat.is_transparent() {
-                continue;
-            }
+        let mut commands: Vec<vk::DrawIndexedIndirectCommand> = Vec::new();
 
-            // Compute approximate depth by transforming the item's origin into camera space.
-            let world_pos = item.transform * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
-            let view_pos = scene.camera.view * world_pos;
-            let depth = view_pos.z;
-            transparent_list.push((i, depth));
+        let mut draw_indices = scene
+            .draw_items
+            .iter()
+            .enumerate()
+            .filter(|(i, item)| {
+                let mat = rm.get_material(item.material);
+                mat.blend_mode == self.blend_mode
+            })
+            .map(|(i, _)| i)
+            .collect::<Vec<usize>>();
+
+        if self.blend_mode == PbrBlendMode::Transparent {
+            draw_indices.sort_by_cached_key(|&i| {
+                let item = &scene.draw_items[i];
+                let world_pos = item.transform * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+                let view_pos = scene.camera.view * world_pos;
+
+                // Back-to-front: farther objects first. In view space more negative z is farther.
+                (view_pos.z * 1000000.0) as i64
+            });
         }
 
-        // Back-to-front: farther objects first. In view space more negative z is usually farther,
-        // so sort ascending (more negative first).
-        transparent_list.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let mut commands = Vec::with_capacity(transparent_list.len());
-        for &(draw_idx, _) in &transparent_list {
-            let item = &scene.draw_items[draw_idx];
+        for idx in draw_indices {
+            let item = &scene.draw_items[idx];
             let mesh = rm.get_mesh(item.mesh);
             commands.push(vk::DrawIndexedIndirectCommand {
                 index_count: mesh.index_count,
                 instance_count: 1,
                 first_index: mesh.index_offset,
                 vertex_offset: mesh.vertex_offset,
-                first_instance: draw_idx as u32,
+                first_instance: idx as u32,
             });
         }
 

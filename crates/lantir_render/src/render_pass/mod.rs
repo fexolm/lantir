@@ -1,6 +1,5 @@
-pub mod opaque;
+pub mod pbr;
 pub mod sky;
-pub mod transparent;
 
 use lantir_hal::CommandBuffer;
 

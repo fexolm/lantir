@@ -62,14 +62,9 @@ pub struct PbrMaterial {
     pub blend_mode: PbrBlendMode,
     pub alpha_cutoff: f32,
 }
-impl PbrMaterial {
-    pub(crate) fn is_transparent(&self) -> bool {
-        matches!(self.blend_mode, PbrBlendMode::Transparent)
-    }
-}
 
 #[repr(u32)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PbrBlendMode {
     Opaque = 0,
     Masked = 1,

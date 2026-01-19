@@ -47,6 +47,8 @@ impl SkyPass {
                 vertex_shader: &shader,
                 fragment_shader: &shader,
                 layout: &pipeline_layout,
+                vertex_specialization: None,
+                fragment_specialization: None,
                 topology: vk::PrimitiveTopology::TRIANGLE_LIST,
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,

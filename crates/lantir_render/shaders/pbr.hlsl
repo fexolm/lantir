@@ -9,6 +9,10 @@
 [[vk::binding(4, 0)]] SamplerState samplers[1024];
 [[vk::binding(5, 0)]] ConstantBuffer<Skybox> skybox;
 
+// Specialization constant: alpha test (discard) enabled.
+// 0 for Opaque/Transparent, 1 for Masked.
+[[vk::constant_id(0)]] const uint PBR_ALPHA_TEST = 0u;
+
 struct V2F
 {
     float4 position : SV_Position;
@@ -21,7 +25,7 @@ struct V2F
 [shader("vertex")]
 V2F vs_main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
-    // `OpaquePass` sets `first_instance = draw_item_index` for each indirect command.
+    // Passes set `first_instance = draw_item_index` for each indirect command.
     uint drawId = instanceId;
 
     DrawItem item = dib[drawId];
@@ -43,10 +47,13 @@ float4 ps_main(V2F input) : SV_Target0
 
     float4 base = input.color;
 
+    float alphaCutoff = 0.0;
+
     if (input.materialId != INVALID)
     {
         PbrMaterial mat = materials[input.materialId];
         base *= mat.base_color;
+        alphaCutoff = mat.alpha_cutoff;
 
         uint albedoId = mat.albedo_tex.x;
         uint albedoSamplerId = mat.albedo_sampler.x;
@@ -56,14 +63,17 @@ float4 ps_main(V2F input) : SV_Target0
             int sampIndex = clamp((int)albedoSamplerId, 0, 1023);
             base *= textures[texIndex].Sample(samplers[sampIndex], input.uv);
         }
-
-        if(base.a < mat.alpha_cutoff) {
-            discard;
-        }
-
     }
 
-    // Simple ambient from HDRI (diffuse-ish): sample along world normal.
+    if (PBR_ALPHA_TEST != 0u)
+    {
+        if (base.a < alphaCutoff)
+        {
+            discard;
+        }
+    }
+
+    // Simple ambient from skybox: sample along world normal.
     if (skybox.tex != INVALID && skybox.sampler != INVALID)
     {
         int texIndex = clamp((int)skybox.tex, 0, 1023);
