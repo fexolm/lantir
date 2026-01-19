@@ -1,9 +1,13 @@
 use std::{marker::PhantomData, sync::Arc};
 
+use anyhow::Context;
+
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
 use lantir_hal::{
-    AccessType, AllocationCreateFlags, Buffer, CopyBufferImageInfo, DescriptorSet, DescriptorSetLayout, ImageBarrier, RenderEngine, Sampler, SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency, vk
+    AccessType, AllocationCreateFlags, Buffer, CopyBufferImageInfo, DescriptorSet,
+    DescriptorSetLayout, ImageBarrier, RenderEngine, Sampler, SamplerInfo, Texture,
+    TextureCreateInfo, UpdateFrequency, vk,
 };
 
 use crate::resources::*;
@@ -18,6 +22,8 @@ pub struct ResourceManager {
 
     meta_descritor_set_layout: Arc<lantir_hal::DescriptorSetLayout>,
     meta_descriptor_set: DescriptorSet,
+
+    skybox_buffer: Buffer,
 
     samplers: Mutex<Vec<Sampler>>,
 
@@ -57,6 +63,18 @@ impl ResourceManager {
 
         let material_buffer = MirroredBuffer::new(engine.clone(), MAX_MATERIALS)?;
 
+        let skybox_buffer = Buffer::new(
+            engine.clone(),
+            &lantir_hal::BufferCreateInfo {
+                size: std::mem::size_of::<Skybox>() as u64,
+                usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
+                memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                update_frequency: UpdateFrequency::Static,
+                vma_flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            },
+        )?;
+
         let meta_descritor_set_layout = DescriptorSetLayout::new(
             engine.clone(),
             &[
@@ -95,6 +113,13 @@ impl ResourceManager {
                     stage: vk::ShaderStageFlags::ALL,
                     count: 1,
                 },
+                // skybox
+                lantir_hal::DescriptorSetBinding {
+                    typ: vk::DescriptorType::UNIFORM_BUFFER,
+                    binding: META_BUFFER_BINDING_SKYBOX,
+                    stage: vk::ShaderStageFlags::ALL,
+                    count: 1,
+                },
             ],
         )?;
 
@@ -127,6 +152,14 @@ impl ResourceManager {
             descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
         });
 
+        meta_descriptor_set.write_buffer(&lantir_hal::WriteBufferInfo {
+            binding: META_BUFFER_BINDING_SKYBOX,
+            buffer: &skybox_buffer,
+            offset: 0,
+            size: std::mem::size_of::<Skybox>() as u64,
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+        });
+
         // Seed sampler array with the default sampler at index 0.
         let samplers = Mutex::new({
             let mut v = Vec::with_capacity(MAX_SAMPLERS);
@@ -152,6 +185,7 @@ impl ResourceManager {
             material_buffer: Mutex::new(material_buffer),
             meta_descritor_set_layout,
             meta_descriptor_set,
+            skybox_buffer,
             samplers,
             textures: Mutex::new(Vec::with_capacity(MAX_TEXTURES)),
             items_buffer: Mutex::new(items_buffer),
@@ -159,6 +193,19 @@ impl ResourceManager {
             uploaded_meshes,
             engine,
         })
+    }
+
+    fn write_skybox(&self, skybox: &Skybox) -> anyhow::Result<()> {
+        unsafe {
+            let ptr = self.skybox_buffer.map()?;
+            std::ptr::copy_nonoverlapping(
+                skybox as *const Skybox as *const u8,
+                ptr,
+                std::mem::size_of::<Skybox>(),
+            );
+            self.skybox_buffer.unmap();
+        }
+        Ok(())
     }
 
     pub fn add_sampler(&self, sampler: Sampler) -> anyhow::Result<SamplerHandle> {
@@ -181,9 +228,9 @@ impl ResourceManager {
         Ok(handle)
     }
 
-    fn upload_rgba8_texture(
+    fn upload_texture_from_bytes(
         &self,
-        rgba: &[u8],
+        bytes: &[u8],
         width: u32,
         height: u32,
         format: vk::Format,
@@ -192,7 +239,7 @@ impl ResourceManager {
             anyhow::bail!("Invalid texture extent: {}x{}", width, height);
         }
 
-        let staging_size = rgba.len() as u64;
+        let staging_size = bytes.len() as u64;
         let staging_buffer = Buffer::new(
             self.engine.clone(),
             &lantir_hal::BufferCreateInfo {
@@ -207,7 +254,7 @@ impl ResourceManager {
 
         unsafe {
             let staging_map = staging_buffer.map()?;
-            std::ptr::copy_nonoverlapping(rgba.as_ptr(), staging_map, rgba.len());
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), staging_map, bytes.len());
             staging_buffer.unmap();
         }
 
@@ -272,6 +319,37 @@ impl ResourceManager {
         Ok(texture)
     }
 
+    fn upload_rgba16f_texture(
+        &self,
+        rgba16f: &[half::f16],
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Texture> {
+        let mut bytes: Vec<u8> = Vec::with_capacity(rgba16f.len() * 2);
+        for v in rgba16f {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        self.upload_texture_from_bytes(&bytes, width, height, vk::Format::R16G16B16A16_SFLOAT)
+    }
+
+    pub fn set_skybox_image(
+        &self,
+        image: image::DynamicImage,
+        exposure: f32,
+        ambient_floor: f32,
+    ) -> anyhow::Result<()> {
+        let handle = self
+            .add_hdr_texture(image)
+            .context("resource_manager.add_hdr_texture")?;
+
+        self.write_skybox(&Skybox {
+            tex: handle as u32,
+            sampler: DEFAULT_SAMPLER_HANDLE as u32,
+            exposure,
+            ambient_floor,
+        })
+    }
+
     pub fn add_texture(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
         let mut textures = self.textures.lock();
 
@@ -281,12 +359,48 @@ impl ResourceManager {
 
         let rgba8 = image.to_rgba8();
 
-        let texture = self.upload_rgba8_texture(
+        let texture = self.upload_texture_from_bytes(
             &rgba8,
             rgba8.width(),
             rgba8.height(),
             vk::Format::R8G8B8A8_UNORM,
         )?;
+
+        let handle = textures.len() as TextureHandle;
+        textures.push(texture);
+
+        self.meta_descriptor_set
+            .write_image(&lantir_hal::WriteImageInfo {
+                binding: META_BUFFER_BINDING_TEXTURE,
+                image: &textures[handle as usize],
+                layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+                sampler: None,
+                array_index: handle,
+            });
+        Ok(handle)
+    }
+
+    pub fn add_hdr_texture(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
+        let mut textures = self.textures.lock();
+
+        if textures.len() >= MAX_TEXTURES {
+            anyhow::bail!("Exceeded maximum number of textures");
+        }
+
+        let rgba32 = image.to_rgba32f();
+        let width = rgba32.width();
+        let height = rgba32.height();
+
+        let mut rgba16: Vec<half::f16> = Vec::with_capacity((width * height * 4) as usize);
+        for p in rgba32.pixels() {
+            rgba16.push(half::f16::from_f32(p.0[0]));
+            rgba16.push(half::f16::from_f32(p.0[1]));
+            rgba16.push(half::f16::from_f32(p.0[2]));
+            rgba16.push(half::f16::from_f32(p.0[3]));
+        }
+
+        let texture = self.upload_rgba16f_texture(&rgba16, width, height)?;
 
         let handle = textures.len() as TextureHandle;
         textures.push(texture);

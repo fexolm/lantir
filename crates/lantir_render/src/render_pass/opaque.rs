@@ -7,9 +7,9 @@ use lantir_hal::{
 
 use crate::{
     include_shader,
-    render_pass::RenderPass,
+    render_pass::{DynamicConstants, RenderPass},
     resources::resource_manager::ResourceManager,
-    scene::{CameraTransform, Scene},
+    scene::Scene,
     world_renderer::WorldRenderer,
 };
 
@@ -36,9 +36,9 @@ impl OpaquePass {
         let shader = Shader::new_u32(engine.clone(), include_shader!("opaque.hlsl"))?;
 
         let push_constants = [vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX,
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: std::mem::size_of::<CameraTransform>() as u32,
+            size: std::mem::size_of::<DynamicConstants>() as u32,
         }];
 
         let pipeline_layout = PipelineLayout::new(
@@ -64,6 +64,7 @@ impl OpaquePass {
                 blending_mode: BlendingMode::NoBlend,
             },
         )?;
+
 
         Ok(Self {
             pipeline,
@@ -94,7 +95,7 @@ impl RenderPass for OpaquePass {
                 cv.color.float32 = [0.0, 0.0, 0.0, 1.0];
                 cv
             },
-            load_op: vk::AttachmentLoadOp::CLEAR,
+            load_op: vk::AttachmentLoadOp::LOAD,
         };
 
         let depth_att = RenderingAttachmentInfo {
@@ -108,7 +109,7 @@ impl RenderPass for OpaquePass {
                 };
                 cv
             },
-            load_op: vk::AttachmentLoadOp::CLEAR,
+            load_op: vk::AttachmentLoadOp::LOAD,
         };
 
         cb.cmd_begin_rendering(
@@ -119,6 +120,12 @@ impl RenderPass for OpaquePass {
                 depth_attachment: Some(&depth_att),
             },
         );
+
+        let push = DynamicConstants {
+            viewproj: scene.camera.viewproj,
+            inv_viewproj: scene.camera.inv_viewproj,
+            camera_pos: scene.camera.camera_pos,
+        };
 
         cb.cmd_bind_graphics_pipeline(renderer.get_engine(), &self.pipeline);
 
@@ -133,9 +140,9 @@ impl RenderPass for OpaquePass {
         cb.cmd_push_constants(
             renderer.get_engine(),
             &self.pipeline.layout,
-            vk::ShaderStageFlags::VERTEX,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             0,
-            &scene.camera,
+            &push,
         );
 
         let mut commands = Vec::with_capacity(scene.draw_items.len());
@@ -173,7 +180,6 @@ impl RenderPass for OpaquePass {
             commands.len() as u32,
             size_of::<vk::DrawIndexedIndirectCommand>() as u32,
         );
-
         cb.cmd_end_rendering(renderer.get_engine());
         Ok(())
     }

@@ -64,10 +64,13 @@ impl SpectatorCameraController {
         let view = glam::Mat4::look_at_rh(self.position, self.position + forward, glam::Vec3::Y);
         let mut proj = glam::Mat4::perspective_rh(70f32.to_radians(), aspect, 0.1, 10000.0);
         proj.y_axis.y *= -1.0;
+        let viewproj = proj * view;
         CameraTransform {
             view,
             proj,
-            viewproj: proj * view,
+            viewproj,
+            inv_viewproj: viewproj.inverse(),
+            camera_pos: self.position.extend(1.0),
         }
     }
 }

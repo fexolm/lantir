@@ -13,19 +13,13 @@ use crate::{
     world_renderer::WorldRenderer,
 };
 
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct GPUDrawPushConstants {
-    pub render_matrix: glam::Mat4,
-}
-
-pub struct TransparentPass {
+pub struct SkyPass {
     pipeline: GraphicsPipeline,
     color_target: Arc<Texture>,
     depth_target: Arc<Texture>,
 }
 
-impl TransparentPass {
+impl SkyPass {
     pub fn new(
         engine: &Arc<RenderEngine>,
         resource_manager: &Arc<ResourceManager>,
@@ -33,7 +27,7 @@ impl TransparentPass {
         color_target: Arc<Texture>,
         depth_target: Arc<Texture>,
     ) -> anyhow::Result<Self> {
-        let shader = Shader::new_u32(engine.clone(), include_shader!("transparent.hlsl"))?;
+        let shader = Shader::new_u32(engine.clone(), include_shader!("sky.hlsl"))?;
 
         let push_constants = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
@@ -61,7 +55,7 @@ impl TransparentPass {
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: false,
                 depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
-                blending_mode: BlendingMode::AlphaBlend,
+                blending_mode: BlendingMode::NoBlend,
             },
         )?;
 
@@ -73,9 +67,9 @@ impl TransparentPass {
     }
 }
 
-impl RenderPass for TransparentPass {
+impl RenderPass for SkyPass {
     fn name(&self) -> &'static str {
-        "TransparentPass"
+        "SkyPass"
     }
 
     fn execute(
@@ -84,8 +78,6 @@ impl RenderPass for TransparentPass {
         scene: &Scene,
         cb: &CommandBuffer,
     ) -> anyhow::Result<()> {
-        let rm = renderer.get_resource_manager();
-
         let color_att = RenderingAttachmentInfo {
             image: &*self.color_target,
             layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -94,7 +86,7 @@ impl RenderPass for TransparentPass {
                 cv.color.float32 = [0.0, 0.0, 0.0, 1.0];
                 cv
             },
-            load_op: vk::AttachmentLoadOp::LOAD,
+            load_op: vk::AttachmentLoadOp::CLEAR,
         };
 
         let depth_att = RenderingAttachmentInfo {
@@ -108,7 +100,7 @@ impl RenderPass for TransparentPass {
                 };
                 cv
             },
-            load_op: vk::AttachmentLoadOp::LOAD,
+            load_op: vk::AttachmentLoadOp::CLEAR,
         };
 
         cb.cmd_begin_rendering(
@@ -120,8 +112,13 @@ impl RenderPass for TransparentPass {
             },
         );
 
-        cb.cmd_bind_graphics_pipeline(renderer.get_engine(), &self.pipeline);
+        let push = DynamicConstants {
+            viewproj: scene.camera.viewproj,
+            inv_viewproj: scene.camera.inv_viewproj,
+            camera_pos: scene.camera.camera_pos,
+        };
 
+        cb.cmd_bind_graphics_pipeline(renderer.get_engine(), &self.pipeline);
         cb.cmd_bind_descriptor_sets(
             renderer.get_engine(),
             &self.pipeline.layout,
@@ -129,13 +126,6 @@ impl RenderPass for TransparentPass {
             vk::PipelineBindPoint::GRAPHICS,
             0,
         );
-
-        let push = DynamicConstants {
-            viewproj: scene.camera.viewproj,
-            inv_viewproj: scene.camera.inv_viewproj,
-            camera_pos: scene.camera.camera_pos,
-        };
-
         cb.cmd_push_constants(
             renderer.get_engine(),
             &self.pipeline.layout,
@@ -144,55 +134,7 @@ impl RenderPass for TransparentPass {
             &push,
         );
 
-        let mut transparent_list: Vec<(usize, f32)> = Vec::new();
-        for (i, item) in scene.draw_items.iter().enumerate() {
-            let mat = rm.get_material(item.material);
-            if !mat.is_transparent() {
-                continue;
-            }
-
-            // Compute approximate depth by transforming the item's origin into camera space.
-            let world_pos = item.transform * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
-            let view_pos = scene.camera.view * world_pos;
-            let depth = view_pos.z;
-            transparent_list.push((i, depth));
-        }
-
-        // Back-to-front: farther objects first. In view space more negative z is usually farther,
-        // so sort ascending (more negative first).
-        transparent_list.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let mut commands = Vec::with_capacity(transparent_list.len());
-        for &(draw_idx, _) in &transparent_list {
-            let item = &scene.draw_items[draw_idx];
-            let mesh = rm.get_mesh(item.mesh);
-            commands.push(vk::DrawIndexedIndirectCommand {
-                index_count: mesh.index_count,
-                instance_count: 1,
-                first_index: mesh.index_offset,
-                vertex_offset: mesh.vertex_offset,
-                first_instance: draw_idx as u32,
-            });
-        }
-
-        if commands.is_empty() {
-            cb.cmd_end_rendering(renderer.get_engine());
-            return Ok(());
-        }
-
-        let indirect_buffer_offset = renderer
-            .get_resource_manager()
-            .add_indirect_draw_commands(&commands)? as u64
-            * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
-
-        cb.cmd_draw_indexed_indirect(
-            renderer.get_engine(),
-            &renderer.get_resource_manager().get_global_indirect_buffer(),
-            indirect_buffer_offset,
-            commands.len() as u32,
-            size_of::<vk::DrawIndexedIndirectCommand>() as u32,
-        );
-
+        cb.cmd_draw(renderer.get_engine(), 3, 1);
         cb.cmd_end_rendering(renderer.get_engine());
         Ok(())
     }

@@ -31,3 +31,39 @@ struct PbrMaterial
     uint1 blend_mode;
     float alpha_cutoff;
 };
+
+struct DynamicConstants
+{
+    column_major float4x4 viewproj;
+    column_major float4x4 inv_viewproj;
+    float4 camera_pos;
+};
+
+struct Skybox
+{
+    uint tex;
+    uint sampler;
+    float exposure;
+    float ambient_floor;
+};
+
+float2 dir_to_equirect_uv(float3 dir)
+{
+    dir = normalize(dir);
+    float u = atan2(dir.z, dir.x) / (2.0 * 3.14159265359) + 0.5;
+    float v = asin(clamp(dir.y, -1.0, 1.0)) / 3.14159265359 + 0.5;
+    return float2(u, 1.0 - v);
+}
+
+float3 tonemap_reinhard(float3 x)
+{
+    return x / (1.0 + x);
+}
+
+float3 linear_to_srgb(float3 x)
+{
+    x = max(x, 0.0);
+    float3 lo = x * 12.92;
+    float3 hi = 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+    return lerp(hi, lo, step(x, 0.0031308));
+}

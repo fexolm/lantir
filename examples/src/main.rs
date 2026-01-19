@@ -29,6 +29,16 @@ fn load_scene_system(world_renderer: Res<WorldRenderer>, mut commands: Commands)
         include_bytes!("../assets/drift_track.glb"),
     )
     .expect("load_gltf");
+
+    world_renderer
+        .resource_manager()
+        .set_skybox_image(
+            image::load_from_memory(include_bytes!("../assets/sunset.exr"))
+                .expect("failed to load skybox image"),
+            1.0,
+            0.35,
+        )
+        .expect("failed to set skybox image");
     commands.insert_resource(SceneLoaded);
 }
 

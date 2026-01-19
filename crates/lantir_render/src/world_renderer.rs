@@ -8,7 +8,7 @@ use lantir_hal::{
 };
 
 use crate::{
-    render_pass::{RenderPass, opaque::OpaquePass, transparent::TransparentPass},
+    render_pass::{RenderPass, opaque::OpaquePass, sky::SkyPass, transparent::TransparentPass},
     resources::resource_manager::ResourceManager,
     scene::Scene,
 };
@@ -29,6 +29,7 @@ pub struct WorldRenderer {
     draw_extent: vk::Extent2D,
     window_extent: vk::Extent2D,
 
+    sky_pass: SkyPass,
     opaque_pass: OpaquePass,
     transparent_pass: TransparentPass,
 }
@@ -86,6 +87,14 @@ impl WorldRenderer {
             depth_target.clone(),
         )?;
 
+        let sky_pass = SkyPass::new(
+            &engine,
+            &resource_manager,
+            color_format,
+            color_target.clone(),
+            depth_target.clone(),
+        )?;
+
         let transparent_pass = TransparentPass::new(
             &engine,
             &resource_manager,
@@ -102,6 +111,7 @@ impl WorldRenderer {
             color_format,
             draw_extent,
             window_extent,
+            sky_pass,
             opaque_pass,
             transparent_pass,
         })
@@ -142,9 +152,11 @@ impl WorldRenderer {
     }
 
     fn run_passes(&self, cb: &CommandBuffer, scene: &Scene) -> anyhow::Result<()> {
+        self.sky_pass.prepare(self, scene)?;
         self.opaque_pass.prepare(self, scene)?;
         self.transparent_pass.prepare(self, scene)?;
 
+        self.sky_pass.execute(self, scene, cb)?;
         self.opaque_pass.execute(self, scene, cb)?;
         self.transparent_pass.execute(self, scene, cb)?;
         Ok(())
