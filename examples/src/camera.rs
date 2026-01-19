@@ -62,8 +62,11 @@ impl SpectatorCameraController {
     fn camera_transform(&self, aspect: f32) -> CameraTransform {
         let forward = self.forward();
         let view = glam::Mat4::look_at_rh(self.position, self.position + forward, glam::Vec3::Y);
-        let mut proj = glam::Mat4::perspective_rh(70f32.to_radians(), aspect, 0.1, 10000.0);
+
+        let mut proj = glam::Mat4::perspective_infinite_reverse_rh(70f32.to_radians(), aspect, 0.1);
+
         proj.y_axis.y *= -1.0;
+
         let viewproj = proj * view;
         CameraTransform {
             view,

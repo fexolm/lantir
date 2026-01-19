@@ -75,7 +75,7 @@ impl PbrPass {
                 color_attachment_format: color_format,
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: blend_mode != PbrBlendMode::Transparent,
-                depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+                depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
                 blending_mode: match blend_mode {
                     PbrBlendMode::Opaque | PbrBlendMode::Masked => BlendingMode::NoBlend,
                     PbrBlendMode::Transparent => BlendingMode::AlphaBlend,
@@ -126,7 +126,7 @@ impl RenderPass for PbrPass {
             clear_value: {
                 let mut cv = vk::ClearValue::default();
                 cv.depth_stencil = vk::ClearDepthStencilValue {
-                    depth: 1.0,
+                    depth: 0.0,
                     stencil: 0,
                 };
                 cv
@@ -171,7 +171,7 @@ impl RenderPass for PbrPass {
             .draw_items
             .iter()
             .enumerate()
-            .filter(|(i, item)| {
+            .filter(|(_i, item)| {
                 let mat = rm.get_material(item.material);
                 mat.blend_mode == self.blend_mode
             })

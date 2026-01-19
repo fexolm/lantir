@@ -15,14 +15,19 @@ struct V2F
 [shader("vertex")]
 V2F vs_main(uint vertexId : SV_VertexID)
 {
-    // Fullscreen triangle
-    float2 p;
-    if (vertexId == 0) p = float2(-1.0, -1.0);
-    else if (vertexId == 1) p = float2(-1.0,  3.0);
-    else p = float2( 3.0, -1.0);
+    // Массив координат для полноэкранного треугольника
+    static const float2 positions[3] = {
+        float2(-1.0, -1.0),
+        float2(-1.0,  3.0),
+        float2( 3.0, -1.0)
+    };
+
+    float2 p = positions[vertexId];
 
     V2F o;
-    o.position = float4(p, 1.0, 1.0);
+    // z = 0.0 для Inverse Z (самая дальняя плоскость)
+    // w = 1.0
+    o.position = float4(p, 0.0, 1.0);
     o.ndc = p;
     return o;
 }
@@ -36,20 +41,24 @@ float4 ps_main(V2F input) : SV_Target0
         return float4(0.0, 0.0, 0.0, 1.0);
     }
 
-    // Reconstruct a world-space ray direction from NDC.
-    float4 clip = float4(input.ndc, 1.0, 1.0);
+    // В Inverse Z горизонт находится в 0.0
+    float4 clip = float4(input.ndc, 0.0, 1.0);
     float4 world = mul(pc.inv_viewproj, clip);
+    
+    // Классическая реконструкция направления луча
     float3 world_pos = world.xyz / max(world.w, 1e-6);
-    float3 dir = normalize(world_pos - pc.camera_pos);
+    float3 dir = normalize(world_pos - pc.camera_pos.xyz);
 
     float2 uv = dir_to_equirect_uv(dir);
 
-    int texIndex = clamp((int)skybox.tex, 0, 1023);
-    int sampIndex = clamp((int)skybox.sampler, 0, 1023);
+    // Безопасный доступ к текстурам
+    uint texIndex = uint(clamp(skybox.tex, 0.0, 1023.0));
+    uint sampIndex = uint(clamp(skybox.sampler, 0.0, 1023.0));
 
     float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex], uv, 0).rgb;
     hdr *= skybox.exposure;
 
+    // Пост-обработка
     float3 ldr = tonemap_reinhard(hdr);
     ldr = linear_to_srgb(ldr);
 
