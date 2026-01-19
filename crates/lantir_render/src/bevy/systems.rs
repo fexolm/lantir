@@ -80,7 +80,8 @@ pub fn render_system(
             crate::resources::DrawItem {
                 mesh,
                 material,
-                transform,
+                model_matrix: transform,
+                normal_matrix: transform.inverse().transpose(),
             }
         })
         .collect::<Vec<_>>();

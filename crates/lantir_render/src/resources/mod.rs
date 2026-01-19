@@ -74,7 +74,8 @@ pub enum PbrBlendMode {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct DrawItem {
-    pub transform: glam::Mat4,
+    pub model_matrix: glam::Mat4,
+    pub normal_matrix: glam::Mat4,
     pub mesh: MeshHandle,
     pub material: MaterialHandle,
 }

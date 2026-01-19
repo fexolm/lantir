@@ -9,8 +9,6 @@
 [[vk::binding(4, 0)]] SamplerState samplers[1024];
 [[vk::binding(5, 0)]] ConstantBuffer<Skybox> skybox;
 
-// Specialization constant: alpha test (discard) enabled.
-// 0 for Opaque/Transparent, 1 for Masked.
 [[vk::constant_id(0)]] const uint PBR_ALPHA_TEST = 0u;
 
 struct V2F
@@ -18,8 +16,8 @@ struct V2F
     float4 position : SV_Position;
     float4 color : TEXCOORD0;
     float2 uv : TEXCOORD1;
-    nointerpolation uint materialId : TEXCOORD2;
-    float3 normalWs : TEXCOORD3;
+    nointerpolation uint material_id : TEXCOORD2;
+    float3 normal : TEXCOORD3;
 };
 
 [shader("vertex")]
@@ -32,11 +30,11 @@ V2F vs_main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     Vertex v = vb[vertexId];
 
     V2F o;
-    o.position = mul(pc.viewproj, mul(item.transform, float4(v.position, 1.0)));
+    o.position = mul(pc.viewproj, mul(item.model_matrix, float4(v.position, 1.0)));
     o.color = v.color;
     o.uv = v.uv;
-    o.materialId = item.material.x;
-    o.normalWs = normalize(mul((float3x3)item.transform, v.normal));
+    o.material_id = item.material.x;
+    o.normal = normalize(mul((float3x3)item.normal_matrix, v.normal));
     return o;
 }
 
@@ -49,9 +47,9 @@ float4 ps_main(V2F input) : SV_Target0
 
     float alphaCutoff = 0.0;
 
-    if (input.materialId != INVALID)
+    if (input.material_id != INVALID)
     {
-        PbrMaterial mat = materials[input.materialId];
+        PbrMaterial mat = materials[input.material_id];
         base *= mat.base_color;
         alphaCutoff = mat.alpha_cutoff;
 
@@ -78,7 +76,7 @@ float4 ps_main(V2F input) : SV_Target0
     {
         int texIndex = clamp((int)skybox.tex, 0, 1023);
         int sampIndex = clamp((int)skybox.sampler, 0, 1023);
-        float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex], dir_to_equirect_uv(input.normalWs), 0).rgb;
+        float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex], dir_to_equirect_uv(input.normal), 0).rgb;
         hdr *= skybox.exposure;
         float3 amb = saturate(tonemap_reinhard(hdr));
         base.rgb *= (skybox.ambient_floor + (1.0 - skybox.ambient_floor) * amb);

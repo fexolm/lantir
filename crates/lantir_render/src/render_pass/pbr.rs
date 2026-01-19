@@ -181,7 +181,7 @@ impl RenderPass for PbrPass {
         if self.blend_mode == PbrBlendMode::Transparent {
             draw_indices.sort_by_cached_key(|&i| {
                 let item = &scene.draw_items[i];
-                let world_pos = item.transform * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+                let world_pos = item.model_matrix * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
                 let view_pos = scene.camera.view * world_pos;
 
                 // Back-to-front: farther objects first. In view space more negative z is farther.

@@ -8,7 +8,8 @@ struct Vertex
 
 struct DrawItem
 {
-    column_major float4x4 transform;
+    column_major float4x4 model_matrix;
+    column_major float4x4 normal_matrix;
     uint2 mesh;
     uint2 material;
 };
