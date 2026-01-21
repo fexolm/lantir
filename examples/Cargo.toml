@@ -15,7 +15,15 @@ bevy_input = "0.18.0"
 bevy_a11y = "0.18.0"
 bevy_window = "0.18.0"
 bevy_winit = "0.18.0"
+bevy_time = "0.18.0"
 bevy_transform = "0.18.0"
+bevy_scene = "0.18.0"
+
+avian3d = { version = "0.5", default-features = false, features = [
+    "3d",
+    "f32",
+    "parry-f32",
+] }
 
 winit = { version = "0.30", features = ["rwh_06"] }
 anyhow = "1.0.100"
