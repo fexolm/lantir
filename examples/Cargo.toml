@@ -15,6 +15,7 @@ bevy_input = "0.18.0"
 bevy_a11y = "0.18.0"
 bevy_window = "0.18.0"
 bevy_winit = "0.18.0"
+bevy_transform = "0.18.0"
 
 winit = { version = "0.30", features = ["rwh_06"] }
 anyhow = "1.0.100"
