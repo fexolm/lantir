@@ -205,6 +205,9 @@ pub enum AccessType {
 
     // Written as a buffer during acceleration structure building (e.g. a staging buffer)
     AccelerationStructureBufferWrite,
+
+    /// Read as an acceleration structure in a compute shader (ray queries)
+    ComputeShaderReadAccelerationStructure,
 }
 
 /// Global barriers define a set of accesses on multiple resources at once.
@@ -565,6 +568,10 @@ fn get_access_info(access_type: AccessType) -> AccessInfo {
         AccessType::AccelerationStructureBufferWrite => AccessInfo {
             stage_mask: vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
             access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        },
+        AccessType::ComputeShaderReadAccelerationStructure => AccessInfo {
+            stage_mask: vk::PipelineStageFlags::COMPUTE_SHADER,
+            access_mask: vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR,
         },
     }
 }

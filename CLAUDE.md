@@ -4,6 +4,13 @@ Lantir is a Vulkan/HLSL PBR rendering engine integrated with Bevy. This file
 describes the project layout and the autonomous debugging workflow Claude uses
 to investigate rendering bugs without human intervention.
 
+> **MANDATORY RULE FOR CLAUDE**: Any request to implement a new rendering
+> feature (new pass, new extension, new visual effect, significant new code)
+> **MUST** be handled by invoking the `feature-pipeline` agent. Do not write
+> rendering feature code directly. The pipeline is:
+> `render-architect → implementer → rendering-reviewer → invariant-auditor →
+> visual-debug-tester → simplifier → gatekeeper`
+
 ---
 
 ## Quick-start commands
@@ -131,9 +138,41 @@ Tools exposed: `build`, `run`, `dump_frame`, `read_frame`, `collect_logs`,
 
 ---
 
-## Specialized subagents
+## Feature request pipeline
 
-Claude Code will automatically use these agents in `.claude/agents/`:
+**Any request to add a new rendering feature MUST go through the 7-agent pipeline.**
+
+Trigger phrases: "добавь", "реализуй", "implement", "add a pass", "add support for", "new render pass", "new feature", or any request that implies writing significant new rendering code.
+
+### How to invoke
+Use the `feature-pipeline` agent via the Agent tool:
+```
+Agent(subagent_type="feature-pipeline", prompt="Feature: <description>. <any extra context>")
+```
+
+The pipeline runs in this order, automatically:
+```
+render-architect → implementer → rendering-reviewer → invariant-auditor
+       ↑ fix loop ↓                    ↑ fix loop ↓
+visual-debug-tester → simplifier → gatekeeper
+```
+
+Never skip stages. Never write feature code directly without going through the pipeline.
+
+### Agent roster
+
+| Agent | Role | Invoke when |
+|-------|------|-------------|
+| `feature-pipeline` | **Coordinator** — runs all stages | User requests a new feature |
+| `render-architect` | Plan only, no code | First stage of pipeline |
+| `implementer` | Write all Rust + HLSL code | Second stage, and fix loops |
+| `rendering-reviewer` | Review code correctness | Third stage |
+| `invariant-auditor` | Check Vulkan spec violations | Fourth stage |
+| `visual-debug-tester` | Build + run + inspect frame | Fifth stage |
+| `simplifier` | Remove unnecessary complexity | Sixth stage |
+| `gatekeeper` | Go/no-go + commit message | Final stage |
+
+### Debug agents (separate from feature pipeline)
 
 | Agent | When to invoke |
 |-------|---------------|
