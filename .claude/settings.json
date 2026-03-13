@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/fexolm/git/lantir && bash -c 'cargo check 2>&1 | grep -E \"^error|^warning.*unused|finished\" | head -40'"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -31,7 +31,12 @@ pub fn init_world_renderer_system(world: &mut World) {
         };
 
         let inner_size = window.inner_size();
-        if inner_size.width == 0 || inner_size.height == 0 {
+        // u32::MAX is Wayland's sentinel meaning "window size not yet known"
+        if inner_size.width == 0
+            || inner_size.height == 0
+            || inner_size.width == u32::MAX
+            || inner_size.height == u32::MAX
+        {
             return None;
         }
 

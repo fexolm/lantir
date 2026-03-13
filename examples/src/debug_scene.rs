@@ -1,0 +1,137 @@
+/// Debug binary: renders one fixed frame and saves it as a PNG.
+///
+/// Usage:
+///   cargo run --bin debug_scene
+///   LANTIR_DUMP_FRAME=debug/frames/out.png cargo run --bin debug_scene
+///
+/// The binary loads `basicmesh.glb` + the sunset skybox, positions a fixed
+/// camera, waits for two frames (so the renderer is fully initialized), dumps
+/// the color buffer, and exits.
+use bevy_app::{App, Startup, Update};
+use bevy_ecs::prelude::*;
+use lantir_bevy::LantirDefaultPlugins;
+use lantir_render::{bevy::components::Camera, scene::CameraTransform, world_renderer::WorldRenderer};
+
+/// Marker resource: set after the scene is successfully loaded.
+#[derive(Resource)]
+struct SceneReady;
+
+// ── fixed camera ─────────────────────────────────────────────────────────────
+
+fn build_camera(eye: glam::Vec3, target: glam::Vec3) -> CameraTransform {
+    let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);
+    let mut proj =
+        glam::Mat4::perspective_infinite_reverse_rh(70f32.to_radians(), 16.0 / 9.0, 0.1);
+    proj.y_axis.y *= -1.0; // flip Y for Vulkan NDC
+    let viewproj = proj * view;
+    CameraTransform {
+        view,
+        proj,
+        viewproj,
+        inv_viewproj: viewproj.inverse(),
+        camera_pos: eye.extend(1.0),
+    }
+}
+
+fn spawn_camera(mut commands: Commands) {
+    let eye = glam::Vec3::new(5.0, 3.0, 8.0);
+    let target = glam::Vec3::new(0.0, 1.0, 0.0);
+    commands.spawn(Camera(build_camera(eye, target)));
+}
+
+// ── scene loading ─────────────────────────────────────────────────────────────
+
+/// Loads the scene once WorldRenderer is available. Uses a `SceneReady` marker
+/// instead of `run_once` so the system can safely skip frames where the
+/// renderer isn't initialized yet (e.g. Wayland sizing race).
+fn load_scene_system(
+    world_renderer: Option<Res<WorldRenderer>>,
+    scene_ready: Option<Res<SceneReady>>,
+    mut commands: Commands,
+) {
+    if scene_ready.is_some() {
+        return; // already loaded
+    }
+    let Some(world_renderer) = world_renderer else {
+        return; // renderer not ready yet
+    };
+
+    let scene = lantir_gltf::load_gltf(
+        &*world_renderer,
+        include_bytes!("../assets/basicmesh.glb"),
+    )
+    .expect("load basicmesh.glb");
+    scene.spawn(&mut commands);
+
+    world_renderer
+        .resource_manager()
+        .set_skybox_image(
+            image::load_from_memory(include_bytes!("../assets/sunset.exr"))
+                .expect("load skybox"),
+            1.0,
+            0.35,
+        )
+        .expect("set skybox");
+
+    commands.insert_resource(SceneReady);
+}
+
+// ── frame dump + exit ─────────────────────────────────────────────────────────
+
+#[derive(Resource)]
+struct DumpState {
+    path: std::path::PathBuf,
+    frames_rendered: u32,
+}
+
+fn dump_and_exit_system(
+    mut state: ResMut<DumpState>,
+    world_renderer: Option<Res<WorldRenderer>>,
+    scene_ready: Option<Res<SceneReady>>,
+) {
+    // Only start counting frames once the scene is loaded and renderer is up.
+    if scene_ready.is_none() {
+        return;
+    }
+    let Some(renderer) = world_renderer else {
+        return;
+    };
+
+    state.frames_rendered += 1;
+
+    // Give the GPU two frames to finish uploading assets before readback.
+    if state.frames_rendered < 3 {
+        return;
+    }
+
+    let path = state.path.clone();
+    renderer
+        .dump_frame_to_file(&path)
+        .unwrap_or_else(|e| panic!("dump_frame_to_file failed: {e}"));
+
+    eprintln!("[debug_scene] frame saved → {}", path.display());
+    std::process::exit(0);
+}
+
+// ── main ──────────────────────────────────────────────────────────────────────
+
+fn main() {
+    let dump_path = std::env::var("LANTIR_DUMP_FRAME")
+        .unwrap_or_else(|_| "debug/frames/latest.png".to_string());
+
+    let mut app = App::new();
+    app.add_plugins(LantirDefaultPlugins {
+        title: "Lantir Debug Scene".to_string(),
+    });
+
+    app.insert_resource(DumpState {
+        path: std::path::PathBuf::from(dump_path),
+        frames_rendered: 0,
+    });
+
+    app.add_systems(Startup, spawn_camera);
+    app.add_systems(Update, load_scene_system);
+    app.add_systems(Update, dump_and_exit_system);
+
+    app.run();
+}

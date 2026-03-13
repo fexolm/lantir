@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use bevy_ecs::resource::Resource;
 use lantir_hal::{
-    AccessType, CommandBuffer, CopyImageInfo, ImageBarrier, RenderEngine, Texture,
-    TextureCreateInfo, UpdateFrequency, vk,
+    AccessType, AllocationCreateFlags, Buffer, BufferCreateInfo, CommandBuffer, CopyImageInfo,
+    ImageBarrier, RenderEngine, Texture, TextureCreateInfo, UpdateFrequency, vk,
 };
 
 use crate::{
@@ -159,7 +159,7 @@ impl WorldRenderer {
     }
 
     pub fn resize(&mut self, new_extent: vk::Extent2D) -> anyhow::Result<()> {
-        self.engine.recreate_swapchain()?;
+        self.engine.recreate_swapchain(new_extent)?;
         self.window_extent = new_extent;
         Ok(())
     }
@@ -174,6 +174,74 @@ impl WorldRenderer {
         self.pbr_opaque_pass.execute(self, scene, cb)?;
         self.pbr_masked_pass.execute(self, scene, cb)?;
         self.pbr_transparent_pass.execute(self, scene, cb)?;
+        Ok(())
+    }
+
+    /// Reads back the last rendered frame and saves it as a PNG.
+    /// Must be called after `draw_frame()`. Blocks until the GPU is idle.
+    pub fn dump_frame_to_file(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+
+        let width = self.draw_extent.width;
+        let height = self.draw_extent.height;
+        let size = (width * height * 4) as vk::DeviceSize;
+
+        self.engine.wait_idle().context("wait_idle before readback")?;
+
+        let readback = Buffer::new(
+            self.engine.clone(),
+            &BufferCreateInfo {
+                size,
+                usage: vk::BufferUsageFlags::TRANSFER_DST,
+                update_frequency: UpdateFrequency::Static,
+                memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                vma_flags: AllocationCreateFlags::MAPPED
+                    | AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            },
+        )
+        .context("create readback buffer")?;
+
+        self.engine
+            .immediate_submit(|cb| {
+                cb.cmd_copy_image_to_buffer(
+                    &self.engine,
+                    &*self.color_target,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    &readback,
+                    width,
+                    height,
+                );
+            })
+            .context("copy image to buffer")?;
+
+        let pixels = unsafe {
+            let ptr = readback.map().context("map readback buffer")?;
+            let slice = std::slice::from_raw_parts(ptr as *const u8, size as usize);
+            let owned = slice.to_vec();
+            readback.unmap();
+            owned
+        };
+
+        // VK_FORMAT_B8G8R8A8_UNORM: bytes are [B, G, R, A]. PNG expects [R, G, B, A].
+        let mut rgba = vec![0u8; size as usize];
+        for i in 0..(width * height) as usize {
+            rgba[i * 4]     = pixels[i * 4 + 2];
+            rgba[i * 4 + 1] = pixels[i * 4 + 1];
+            rgba[i * 4 + 2] = pixels[i * 4];
+            rgba[i * 4 + 3] = pixels[i * 4 + 3];
+        }
+
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("create dirs for {}", path.display()))?;
+            }
+        }
+
+        image::save_buffer(path, &rgba, width, height, image::ColorType::Rgba8)
+            .with_context(|| format!("save PNG to {}", path.display()))?;
+
         Ok(())
     }
 

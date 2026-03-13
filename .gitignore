@@ -1,3 +1,7 @@
 /target
 .idea
 .vscode
+
+# debug output (keep directory structure via .gitkeep, ignore generated files)
+debug/frames/*.png
+debug/logs/*.log

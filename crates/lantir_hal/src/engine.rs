@@ -39,7 +39,12 @@ impl RenderEngine {
             let instance = Instance::new(window, config.debug)?;
             let surface = Surface::new(&instance, window)?;
             let device = Device::new(&instance, &surface)?;
-            let swapchain = Swapchain::new(&instance, &device, &surface)?;
+            let win_size = window.inner_size();
+            let fallback = vk::Extent2D {
+                width: win_size.width.clamp(1, 16384),
+                height: win_size.height.clamp(1, 16384),
+            };
+            let swapchain = Swapchain::new(&instance, &device, &surface, fallback)?;
 
             let mut allocator_create_info =
                 AllocatorCreateInfo::new(&instance, &device, device.physical_device);
@@ -108,13 +113,13 @@ impl RenderEngine {
         self.is_started.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub fn recreate_swapchain(&self) -> anyhow::Result<()> {
+    pub fn recreate_swapchain(&self, fallback_extent: vk::Extent2D) -> anyhow::Result<()> {
         unsafe {
             self.device.device_wait_idle()?;
 
             let mut swc = self.swapchain.lock().unwrap();
             swc.destroy(&self.device);
-            *swc = Swapchain::new(&self.instance, &self.device, &self.surface)?;
+            *swc = Swapchain::new(&self.instance, &self.device, &self.surface, fallback_extent)?;
 
             Ok(())
         }
@@ -192,6 +197,10 @@ impl RenderEngine {
     ) {
         let frame_index = self.get_current_frame_index();
         self.frames[frame_index].enqueue_drop(resource);
+    }
+
+    pub fn wait_idle(&self) -> anyhow::Result<()> {
+        unsafe { self.device.device_wait_idle().map_err(Into::into) }
     }
 
     pub fn immediate_submit<F: FnOnce(&CommandBuffer)>(&self, f: F) -> anyhow::Result<()> {

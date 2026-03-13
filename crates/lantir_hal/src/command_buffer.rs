@@ -383,6 +383,43 @@ impl CommandBuffer {
         }
     }
 
+    pub fn cmd_copy_image_to_buffer(
+        &self,
+        engine: &RenderEngine,
+        image: &dyn Image,
+        image_layout: vk::ImageLayout,
+        buffer: &Buffer,
+        width: u32,
+        height: u32,
+    ) {
+        let copy_region = vk::BufferImageCopy::default()
+            .buffer_offset(0)
+            .buffer_row_length(0)
+            .buffer_image_height(0)
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1),
+            )
+            .image_extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            });
+
+        unsafe {
+            engine.device.cmd_copy_image_to_buffer(
+                self.command_buffer,
+                image.get_image(),
+                image_layout,
+                buffer.get_buffer(),
+                &[copy_region],
+            );
+        }
+    }
+
     pub fn cmd_bind_index_buffer(
         &self,
         engine: &RenderEngine,

@@ -3,6 +3,14 @@ name = "example"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "example"
+path = "src/main.rs"
+
+[[bin]]
+name = "debug_scene"
+path = "src/debug_scene.rs"
+
 [dependencies]
 lantir_render = { path = "../crates/lantir_render" }
 lantir_hal = { path = "../crates/lantir_hal" }

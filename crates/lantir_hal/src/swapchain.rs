@@ -35,11 +35,24 @@ impl Swapchain {
         instance: &Instance,
         device: &Device,
         surface: &Surface,
+        // Used when the surface reports u32::MAX (Wayland) for currentExtent.
+        fallback_extent: vk::Extent2D,
     ) -> anyhow::Result<Self> {
         let loader = swapchain::Device::new(instance, device);
 
         let surface_caps = surface
             .get_physical_device_surface_capabilities(device.physical_device, surface.get_raw())?;
+
+        // On Wayland, currentExtent == (u32::MAX, u32::MAX) means "use whatever the
+        // window system gives you". We fall back to the winit-reported window size.
+        let swapchain_extent = if surface_caps.current_extent.width == u32::MAX {
+            vk::Extent2D {
+                width: fallback_extent.width.max(1),
+                height: fallback_extent.height.max(1),
+            }
+        } else {
+            surface_caps.current_extent
+        };
 
         let swapchain = {
             let create_info = vk::SwapchainCreateInfoKHR::default()
@@ -47,7 +60,7 @@ impl Swapchain {
                 .min_image_count(3)
                 .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
                 .image_format(vk::Format::B8G8R8A8_UNORM)
-                .image_extent(surface_caps.current_extent)
+                .image_extent(swapchain_extent)
                 .image_usage(
                     vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
                 )
