@@ -71,7 +71,7 @@ float4 ps_main(V2F input) : SV_Target0
         }
     }
 
-    // Simple ambient from skybox: sample along world normal.
+    // Simple ambient from skybox: sample along world normal direction.
     if (skybox.tex != INVALID && skybox.sampler != INVALID)
     {
         int texIndex = clamp((int)skybox.tex, 0, 1023);
@@ -79,7 +79,7 @@ float4 ps_main(V2F input) : SV_Target0
         float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex], dir_to_equirect_uv(input.normal), 0).rgb;
         hdr *= skybox.exposure;
         float3 amb = saturate(tonemap_reinhard(hdr));
-        base.rgb *= (skybox.ambient_floor + (1.0 - skybox.ambient_floor) * amb);
+        base.rgb *= skybox.ambient_floor + (1.0 - skybox.ambient_floor) * amb;
     }
 
     return base;

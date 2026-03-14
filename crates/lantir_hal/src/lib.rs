@@ -1,6 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::all)]
 
+pub mod acceleration_structure;
 mod barriers;
 mod buffer;
 mod command_buffer;
@@ -31,7 +32,7 @@ pub use frame::RenderFrame;
 pub use image::{Image, Sampler, SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency};
 pub use pipeline::{
     BlendingMode, ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout,
-    Specialization,
+    RayTracingPipeline, Specialization,
 };
 pub use shader::Shader;
 pub use swapchain::SwapchainImage;

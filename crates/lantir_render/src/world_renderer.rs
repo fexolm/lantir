@@ -8,7 +8,7 @@ use lantir_hal::{
 };
 
 use crate::{
-    render_pass::{RenderPass, pbr::PbrPass, sky::SkyPass},
+    render_pass::{RenderPass, pbr::PbrPass, rt::RtPass, sky::SkyPass},
     resources::{PbrBlendMode, resource_manager::ResourceManager},
     scene::Scene,
 };
@@ -33,6 +33,7 @@ pub struct WorldRenderer {
     pbr_opaque_pass: PbrPass,
     pbr_masked_pass: PbrPass,
     pbr_transparent_pass: PbrPass,
+    rt_pass: RtPass,
 }
 
 impl WorldRenderer {
@@ -44,6 +45,7 @@ impl WorldRenderer {
 
         let color_format = vk::Format::B8G8R8A8_UNORM;
 
+        // Color target needs STORAGE usage so the RT pass can write to it as a storage image.
         let color_target = Arc::new(Texture::new(
             engine.clone(),
             &TextureCreateInfo {
@@ -57,7 +59,9 @@ impl WorldRenderer {
                 },
                 usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
                     | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::SAMPLED,
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE,
                 aspect: vk::ImageAspectFlags::COLOR,
                 mip_levels: 1,
             },
@@ -74,7 +78,7 @@ impl WorldRenderer {
                     height: draw_extent.height,
                     depth: 1,
                 },
-                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::DEPTH,
                 mip_levels: 1,
             },
@@ -115,6 +119,13 @@ impl WorldRenderer {
             PbrBlendMode::Transparent,
         )?;
 
+        let rt_pass = RtPass::new(
+            &engine,
+            &resource_manager,
+            draw_extent,
+            color_target.clone(),
+        )?;
+
         Ok(Self {
             engine,
             resource_manager,
@@ -127,6 +138,7 @@ impl WorldRenderer {
             pbr_opaque_pass,
             pbr_masked_pass,
             pbr_transparent_pass,
+            rt_pass,
         })
     }
 
@@ -174,6 +186,8 @@ impl WorldRenderer {
         self.pbr_opaque_pass.execute(self, scene, cb)?;
         self.pbr_masked_pass.execute(self, scene, cb)?;
         self.pbr_transparent_pass.execute(self, scene, cb)?;
+        self.rt_pass.execute(self, scene, cb)?;
+
         Ok(())
     }
 
@@ -186,7 +200,9 @@ impl WorldRenderer {
         let height = self.draw_extent.height;
         let size = (width * height * 4) as vk::DeviceSize;
 
-        self.engine.wait_idle().context("wait_idle before readback")?;
+        self.engine
+            .wait_idle()
+            .context("wait_idle before readback")?;
 
         let readback = Buffer::new(
             self.engine.clone(),
@@ -226,7 +242,7 @@ impl WorldRenderer {
         // VK_FORMAT_B8G8R8A8_UNORM: bytes are [B, G, R, A]. PNG expects [R, G, B, A].
         let mut rgba = vec![0u8; size as usize];
         for i in 0..(width * height) as usize {
-            rgba[i * 4]     = pixels[i * 4 + 2];
+            rgba[i * 4] = pixels[i * 4 + 2];
             rgba[i * 4 + 1] = pixels[i * 4 + 1];
             rgba[i * 4 + 2] = pixels[i * 4];
             rgba[i * 4 + 3] = pixels[i * 4 + 3];
@@ -296,8 +312,15 @@ impl WorldRenderer {
             vk::IndexType::UINT32,
         );
 
+        let frame_slot = self.engine.get_current_frame_index();
+        self.resource_manager
+            .update_tlas(frame_slot, scene.draw_items)
+            .context("resource_manager.update_tlas")?;
+
         self.run_passes(cb, scene).context("run_passes")?;
 
+        // After run_passes, color_target is in COLOR_ATTACHMENT_OPTIMAL
+        // (either from rasterization or from the RT pass barrier).
         cb.cmd_image_barrier(
             &self.engine,
             &ImageBarrier {

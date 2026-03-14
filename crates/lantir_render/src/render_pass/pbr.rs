@@ -191,12 +191,11 @@ impl RenderPass for PbrPass {
 
         for idx in draw_indices {
             let item = &scene.draw_items[idx];
-            let mesh = rm.get_mesh(item.mesh);
             commands.push(vk::DrawIndexedIndirectCommand {
-                index_count: mesh.index_count,
+                index_count: rm.get_mesh_index_count(item.mesh),
                 instance_count: 1,
-                first_index: mesh.index_offset,
-                vertex_offset: mesh.vertex_offset,
+                first_index: rm.get_mesh_index_offset(item.mesh),
+                vertex_offset: rm.get_mesh_vertex_offset(item.mesh),
                 first_instance: idx as u32,
             });
         }

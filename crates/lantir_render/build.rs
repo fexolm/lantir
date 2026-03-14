@@ -92,6 +92,7 @@ fn compile_hlsl_to_spirv(shader_src_root: &Path, src_path: &Path, out_spv: &Path
         .arg("-T")
         .arg("lib_6_6")
         .arg("-fspv-target-env=vulkan1.3")
+        .arg("-fspv-extension=SPV_KHR_ray_tracing")
         .arg("-Fo")
         .arg(out_spv)
         .arg("-I")

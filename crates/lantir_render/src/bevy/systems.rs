@@ -78,6 +78,7 @@ pub fn render_system(
     query: Query<(&Mesh, &Material, &GlobalTransform)>,
     camera_query: Query<&Camera>,
 ) {
+    let rm = world_renderer.resource_manager().clone();
     let draw_items = query
         .iter()
         .map(|(&Mesh(mesh), &Material(material), global_transform)| {
@@ -87,6 +88,7 @@ pub fn render_system(
                 material,
                 model_matrix: transform,
                 normal_matrix: transform.inverse().transpose(),
+                mesh_offsets: rm.pack_mesh_offsets(mesh),
             }
         })
         .collect::<Vec<_>>();

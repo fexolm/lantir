@@ -26,6 +26,9 @@ pub struct RenderEngine {
     immediate_command_buffer: Mutex<CommandBuffer>,
 
     is_started: AtomicBool,
+
+    pub(crate) acceleration_structure_loader: ash::khr::acceleration_structure::Device,
+    pub(crate) ray_tracing_pipeline_loader: ash::khr::ray_tracing_pipeline::Device,
 }
 
 pub struct RenderEngineConfig {
@@ -78,6 +81,14 @@ impl RenderEngine {
                         ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                         descriptor_count: 40960,
                     },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::STORAGE_IMAGE,
+                        descriptor_count: 1024,
+                    },
+                    vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                        descriptor_count: 1024,
+                    },
                 ];
 
                 let create_info = vk::DescriptorPoolCreateInfo::default()
@@ -94,6 +105,11 @@ impl RenderEngine {
             let immediate_command_buffer =
                 Mutex::new(CommandBuffer::new(&device, device.universal_pool)?);
 
+            let acceleration_structure_loader =
+                ash::khr::acceleration_structure::Device::new(&instance, &device);
+            let ray_tracing_pipeline_loader =
+                ash::khr::ray_tracing_pipeline::Device::new(&instance, &device);
+
             Ok(Arc::new(Self {
                 instance,
                 surface,
@@ -105,6 +121,8 @@ impl RenderEngine {
                 current_frame: Mutex::new(0),
                 immediate_command_buffer,
                 is_started: AtomicBool::new(false),
+                acceleration_structure_loader,
+                ray_tracing_pipeline_loader,
             }))
         }
     }
@@ -129,6 +147,11 @@ impl RenderEngine {
         let current_frame = self.current_frame.lock().unwrap();
 
         *current_frame
+    }
+
+    /// Returns the number of frames in flight.
+    pub fn frames_in_flight(&self) -> usize {
+        self.frames.len()
     }
 
     pub fn begin_frame(&self) -> anyhow::Result<&RenderFrame> {
@@ -201,6 +224,19 @@ impl RenderEngine {
 
     pub fn wait_idle(&self) -> anyhow::Result<()> {
         unsafe { self.device.device_wait_idle().map_err(Into::into) }
+    }
+
+    /// Query ray tracing pipeline properties (shader group handle size, alignment, etc.)
+    pub fn ray_tracing_pipeline_properties(
+        &self,
+    ) -> vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'static> {
+        let mut props = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
+        let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut props);
+        unsafe {
+            self.instance
+                .get_physical_device_properties2(self.device.physical_device, &mut props2);
+        }
+        props
     }
 
     pub fn immediate_submit<F: FnOnce(&CommandBuffer)>(&self, f: F) -> anyhow::Result<()> {

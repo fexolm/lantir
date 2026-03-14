@@ -1,6 +1,7 @@
 ﻿use crate::barriers::ImageBarrier;
 use crate::barriers::{get_image_memory_barrier, make_subresource_range};
 use crate::device::Device;
+use crate::pipeline::RayTracingPipeline;
 use crate::{
     Buffer, ComputePipeline, DescriptorSet, GraphicsPipeline, Image, PipelineLayout, RenderEngine,
 };
@@ -154,6 +155,16 @@ impl CommandBuffer {
             engine
                 .device
                 .cmd_blit_image2(self.command_buffer, &blit_info);
+        }
+    }
+
+    pub fn cmd_bind_rt_pipeline(&self, engine: &RenderEngine, pipeline: &RayTracingPipeline) {
+        unsafe {
+            engine.device.cmd_bind_pipeline(
+                self.command_buffer,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                pipeline.pipeline,
+            );
         }
     }
 
@@ -432,6 +443,31 @@ impl CommandBuffer {
                 index_buffer.get_buffer(),
                 0,
                 index_type,
+            );
+        }
+    }
+
+    /// Dispatch rays using the RT pipeline.
+    pub fn cmd_trace_rays(
+        &self,
+        engine: &RenderEngine,
+        raygen_region: &vk::StridedDeviceAddressRegionKHR,
+        miss_region: &vk::StridedDeviceAddressRegionKHR,
+        hit_region: &vk::StridedDeviceAddressRegionKHR,
+        callable_region: &vk::StridedDeviceAddressRegionKHR,
+        width: u32,
+        height: u32,
+    ) {
+        unsafe {
+            engine.ray_tracing_pipeline_loader.cmd_trace_rays(
+                self.command_buffer,
+                raygen_region,
+                miss_region,
+                hit_region,
+                callable_region,
+                width,
+                height,
+                1,
             );
         }
     }

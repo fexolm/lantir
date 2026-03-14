@@ -22,9 +22,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use crate::RenderEngine;
 use crate::buffer::Buffer;
 use crate::image::Image;
-use crate::RenderEngine;
 
 /// Defines all potential resource usages
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
@@ -595,5 +595,7 @@ pub(crate) fn is_write_access(access_type: AccessType) -> bool {
             | AccessType::HostWrite
             | AccessType::ColorAttachmentReadWrite
             | AccessType::General
+            | AccessType::AccelerationStructureBuildWrite
+            | AccessType::AccelerationStructureBufferWrite
     )
 }

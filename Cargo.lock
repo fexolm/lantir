@@ -2123,6 +2123,7 @@ dependencies = [
  "anyhow",
  "ash",
  "ash-window",
+ "glam 0.30.10",
  "log",
  "vk-mem",
  "winit",

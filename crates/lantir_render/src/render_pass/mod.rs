@@ -1,4 +1,5 @@
 pub mod pbr;
+pub mod rt;
 pub mod sky;
 
 use lantir_hal::CommandBuffer;

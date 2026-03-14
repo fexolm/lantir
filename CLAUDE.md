@@ -4,6 +4,9 @@ Lantir is a Vulkan/HLSL PBR rendering engine integrated with Bevy. This file
 describes the project layout and the autonomous debugging workflow Claude uses
 to investigate rendering bugs without human intervention.
 
+> **PROJECT GOAL**: Real-time Global Illumination Forward+ rendering.
+> Every architectural decision must be evaluated in that context.
+
 > **MANDATORY RULE FOR CLAUDE**: Any request to implement a new rendering
 > feature (new pass, new extension, new visual effect, significant new code)
 > **MUST** be handled by invoking the `feature-pipeline` agent. Do not write

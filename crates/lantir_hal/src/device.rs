@@ -26,6 +26,9 @@ impl Device {
             let device_extension_names_raw = [
                 swapchain::NAME.as_ptr(),
                 vk::KHR_SHADER_NON_SEMANTIC_INFO_NAME.as_ptr(),
+                vk::KHR_ACCELERATION_STRUCTURE_NAME.as_ptr(),
+                vk::KHR_RAY_TRACING_PIPELINE_NAME.as_ptr(),
+                vk::KHR_DEFERRED_HOST_OPERATIONS_NAME.as_ptr(),
             ];
 
             let features = vk::PhysicalDeviceFeatures {
@@ -44,10 +47,17 @@ impl Device {
                 .synchronization2(true)
                 .shader_demote_to_helper_invocation(true)
                 .dynamic_rendering(true);
+            let mut as_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+                .acceleration_structure(true);
+            let mut rtp_features =
+                vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
+                    .ray_tracing_pipeline(true);
 
             let mut all_features = features2
                 .push_next(&mut features12)
-                .push_next(&mut features13);
+                .push_next(&mut features13)
+                .push_next(&mut as_features)
+                .push_next(&mut rtp_features);
 
             let priorities = [1.0];
 
@@ -141,8 +151,13 @@ struct SelectedPhysicalDevice {
     universal_family: u32,
 }
 
-fn get_required_device_extensions() -> [&'static CStr; 1] {
-    [swapchain::NAME]
+fn get_required_device_extensions() -> [&'static CStr; 4] {
+    [
+        swapchain::NAME,
+        vk::KHR_ACCELERATION_STRUCTURE_NAME,
+        vk::KHR_RAY_TRACING_PIPELINE_NAME,
+        vk::KHR_DEFERRED_HOST_OPERATIONS_NAME,
+    ]
 }
 
 fn check_required_extensions(instance: &ash::Instance, device: vk::PhysicalDevice) -> bool {

@@ -4,6 +4,9 @@ use anyhow::Context;
 
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 
+use lantir_hal::acceleration_structure::{
+    AccelerationStructure, TlasInstance, build_blas, build_tlas,
+};
 use lantir_hal::{
     AccessType, AllocationCreateFlags, Buffer, CopyBufferImageInfo, DescriptorSet,
     DescriptorSetLayout, ImageBarrier, RenderEngine, Sampler, SamplerInfo, Texture,
@@ -26,10 +29,12 @@ pub struct ResourceManager {
     skybox_buffer: Buffer,
 
     samplers: Mutex<Vec<Sampler>>,
-
     textures: Mutex<Vec<Texture>>,
-
     uploaded_meshes: Mutex<Vec<UploadedMesh>>,
+
+    // Per-frame TLAS: rebuilt every frame from current draw_items.
+    // One slot per frame-in-flight; the slot being rendered always owns a valid TLAS.
+    tlas: Vec<Mutex<Option<AccelerationStructure>>>,
 
     engine: Arc<RenderEngine>,
 }
@@ -120,6 +125,20 @@ impl ResourceManager {
                     stage: vk::ShaderStageFlags::ALL,
                     count: 1,
                 },
+                // index buffer (for RT hit shader normal interpolation)
+                lantir_hal::DescriptorSetBinding {
+                    typ: vk::DescriptorType::STORAGE_BUFFER,
+                    binding: META_BUFFER_BINDING_INDEX,
+                    stage: vk::ShaderStageFlags::ALL,
+                    count: 1,
+                },
+                // TLAS (per-frame, rebuilt from current draw_items each frame)
+                lantir_hal::DescriptorSetBinding {
+                    typ: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                    binding: META_BUFFER_BINDING_TLAS,
+                    stage: vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                    count: 1,
+                },
             ],
         )?;
 
@@ -160,6 +179,14 @@ impl ResourceManager {
             descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
         });
 
+        meta_descriptor_set.write_buffer(&lantir_hal::WriteBufferInfo {
+            binding: META_BUFFER_BINDING_INDEX,
+            buffer: index_buffer.buffer(),
+            offset: 0,
+            size: index_buffer.capacity_bytes(),
+            descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+        });
+
         // Seed sampler array with the default sampler at index 0.
         let samplers = Mutex::new({
             let mut v = Vec::with_capacity(MAX_SAMPLERS);
@@ -179,6 +206,9 @@ impl ResourceManager {
 
         let uploaded_meshes = Mutex::new(Vec::with_capacity(MAX_MESHES));
 
+        let frames_in_flight = engine.frames_in_flight();
+        let tlas = (0..frames_in_flight).map(|_| Mutex::new(None)).collect();
+
         Ok(ResourceManager {
             vertex_buffer: Mutex::new(vertex_buffer),
             index_buffer: Mutex::new(index_buffer),
@@ -191,6 +221,7 @@ impl ResourceManager {
             items_buffer: Mutex::new(items_buffer),
             global_indirect_buffer: Mutex::new(global_indirect_buffer),
             uploaded_meshes,
+            tlas,
             engine,
         })
     }
@@ -428,19 +459,71 @@ impl ResourceManager {
             ib.add(&mesh.indices)?
         };
 
-        let mesh = UploadedMesh {
+        let vertex_count = mesh.vertices.len() as u32;
+        let index_count = mesh.indices.len() as u32;
+        let triangle_count = index_count / 3;
+        let vertex_stride = std::mem::size_of::<Vertex>() as u64;
+
+        let vb_base = self.vertex_buffer.lock().buffer.get_device_address();
+        let ib_base = self.index_buffer.lock().buffer.get_device_address();
+
+        let vb_addr = vb_base + (vertex_offset.max(0) as u64) * vertex_stride;
+        let ib_addr = ib_base + (index_offset as u64) * std::mem::size_of::<u32>() as u64;
+
+        let blas = build_blas(
+            &self.engine,
+            vb_addr,
+            vertex_count,
+            vertex_stride,
+            ib_addr,
+            triangle_count,
+        )
+        .context("build_blas in add_mesh")?;
+
+        let uploaded = UploadedMesh {
             vertex_offset,
             index_offset,
-            index_count: mesh.indices.len() as u32,
+            index_count,
+            blas,
         };
 
         let handle = {
             let mut mb = self.uploaded_meshes.lock();
-            mb.push(mesh);
+            mb.push(uploaded);
             (mb.len() - 1) as MeshHandle
         };
 
         Ok(handle)
+    }
+
+    /// Build a TLAS covering all opaque/masked draw items in `draw_items`.
+    /// Returns `None` if there are no geometry items.
+    pub fn build_tlas_for_items(
+        &self,
+        draw_items: &[DrawItem],
+    ) -> anyhow::Result<Option<AccelerationStructure>> {
+        let mb = self.uploaded_meshes.lock();
+        let mut instances: Vec<TlasInstance> = Vec::new();
+
+        for (idx, item) in draw_items.iter().enumerate() {
+            let mesh = &mb[item.mesh as usize];
+            if mesh.index_count == 0 {
+                continue;
+            }
+            instances.push(TlasInstance::new(
+                mesh.blas.get_device_address(),
+                item.model_matrix,
+                idx as u32,
+                0xFF,
+            ));
+        }
+
+        if instances.is_empty() {
+            return Ok(None);
+        }
+
+        let tlas = build_tlas(&self.engine, &instances).context("build_tlas_for_items")?;
+        Ok(Some(tlas))
     }
 
     pub fn add_material(&self, material: PbrMaterial) -> anyhow::Result<MaterialHandle> {
@@ -452,9 +535,28 @@ impl ResourceManager {
         Ok(handle)
     }
 
-    pub fn get_mesh(&self, handle: MeshHandle) -> UploadedMesh {
+    pub fn get_mesh_index_count(&self, handle: MeshHandle) -> u32 {
+        self.uploaded_meshes.lock()[handle as usize].index_count
+    }
+
+    pub fn get_mesh_vertex_offset(&self, handle: MeshHandle) -> i32 {
+        self.uploaded_meshes.lock()[handle as usize].vertex_offset
+    }
+
+    pub fn get_mesh_index_offset(&self, handle: MeshHandle) -> u32 {
+        self.uploaded_meshes.lock()[handle as usize].index_offset
+    }
+
+    /// Returns packed mesh offsets for DrawItem.mesh_offsets:
+    ///   low  32 bits = vertex_offset (first vertex in the global VB for this mesh, as u32)
+    ///   high 32 bits = index_offset  (first index in the global IB for this mesh)
+    /// The RT hit shader reads .x as vertex_offset and .y as index_offset via uint2 mesh_offsets.
+    pub fn pack_mesh_offsets(&self, handle: MeshHandle) -> u64 {
         let mb = self.uploaded_meshes.lock();
-        mb[handle as usize]
+        let mesh = &mb[handle as usize];
+        let vertex_offset = mesh.vertex_offset.max(0) as u32;
+        let index_offset = mesh.index_offset;
+        (vertex_offset as u64) | ((index_offset as u64) << 32)
     }
 
     pub fn get_material(&self, handle: MaterialHandle) -> PbrMaterial {
@@ -470,9 +572,55 @@ impl ResourceManager {
         &self.meta_descritor_set_layout
     }
 
+    /// Rebuild the TLAS for `frame_slot` from the current draw_items and update
+    /// the per-slot TLAS descriptor in the meta descriptor set.
+    /// Called every frame before the RT pass executes.
+    pub fn update_tlas(&self, frame_slot: usize, draw_items: &[DrawItem]) -> anyhow::Result<()> {
+        let uploaded = self.uploaded_meshes.lock();
+        let instances: Vec<TlasInstance> = draw_items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let mesh = uploaded.get(item.mesh as usize)?;
+                Some(TlasInstance::new(
+                    mesh.blas.get_device_address(),
+                    item.model_matrix,
+                    idx as u32,
+                    0xFF,
+                ))
+            })
+            .collect();
+
+        if instances.is_empty() {
+            return Ok(());
+        }
+
+        let new_tlas = build_tlas(&self.engine, &instances).context("update_tlas: build_tlas")?;
+
+        self.meta_descriptor_set
+            .write_acceleration_structure_for_slot(
+                frame_slot,
+                META_BUFFER_BINDING_TLAS,
+                new_tlas.get_raw_handle(),
+            );
+
+        *self.tlas[frame_slot].lock() = Some(new_tlas);
+        Ok(())
+    }
+
     pub fn get_index_buffer(&self) -> MappedMutexGuard<'_, Buffer> {
         let ib = self.index_buffer.lock();
         MutexGuard::map(ib, |ib: &mut GpuBuffer<u32>| &mut ib.buffer)
+    }
+
+    /// Returns the device address of the shared vertex buffer for AS building.
+    pub fn get_vertex_buffer_device_address(&self) -> u64 {
+        self.vertex_buffer.lock().buffer.get_device_address()
+    }
+
+    /// Returns the device address of the shared index buffer for AS building.
+    pub fn get_index_buffer_device_address(&self) -> u64 {
+        self.index_buffer.lock().buffer.get_device_address()
     }
 
     pub fn set_draw_items(&self, items: &[DrawItem]) -> anyhow::Result<()> {
@@ -545,6 +693,7 @@ impl<T> GpuBuffer<T> {
                 usage: vk::BufferUsageFlags::STORAGE_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                     | extra_usage,
                 memory_property: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 update_frequency,

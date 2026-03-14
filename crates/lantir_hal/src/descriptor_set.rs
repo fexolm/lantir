@@ -141,6 +141,31 @@ impl DescriptorSet {
             }
         }
     }
+
+    /// Write an acceleration structure to a single frame slot.
+    /// Used for per-frame TLAS updates (TLAS is rebuilt each frame).
+    pub fn write_acceleration_structure_for_slot(
+        &self,
+        slot: usize,
+        binding: u32,
+        acceleration_structure: vk::AccelerationStructureKHR,
+    ) {
+        let dst_set = self.descriptor_sets[slot];
+        let as_slice = [acceleration_structure];
+        let mut write_as = vk::WriteDescriptorSetAccelerationStructureKHR::default()
+            .acceleration_structures(&as_slice);
+        let descriptor_write = vk::WriteDescriptorSet::default()
+            .dst_set(dst_set)
+            .dst_binding(binding)
+            .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+            .descriptor_count(1)
+            .push_next(&mut write_as);
+        unsafe {
+            self.engine
+                .device
+                .update_descriptor_sets(&[descriptor_write], &[]);
+        }
+    }
 }
 
 pub struct DescriptorSetLayoutData {

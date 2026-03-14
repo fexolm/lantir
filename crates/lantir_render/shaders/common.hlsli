@@ -12,6 +12,11 @@ struct DrawItem
     column_major float4x4 normal_matrix;
     uint2 mesh;
     uint2 material;
+    // mesh_offsets packed by ResourceManager::pack_mesh_offsets():
+    //   .x = vertex_offset (first vertex in global VB for this mesh)
+    //   .y = index_offset  (first index in global IB for this mesh)
+    // Used by the RT hit shader to look up vertex attributes.
+    uint2 mesh_offsets;
 };
 
 struct PbrMaterial

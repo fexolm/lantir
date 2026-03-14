@@ -1,3 +1,5 @@
+use lantir_hal::acceleration_structure::AccelerationStructure;
+
 pub mod resource_manager;
 
 pub type TextureHandle = u64;
@@ -24,6 +26,8 @@ pub const META_BUFFER_BINDING_TEXTURE: u32 = 2;
 pub const META_BUFFER_BINDING_DRAW_ITEMS: u32 = 3;
 pub const META_BUFFER_BINDING_SAMPLER: u32 = 4;
 pub const META_BUFFER_BINDING_SKYBOX: u32 = 5;
+pub const META_BUFFER_BINDING_INDEX: u32 = 6;
+pub const META_BUFFER_BINDING_TLAS: u32 = 7;
 
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -76,15 +80,23 @@ pub enum PbrBlendMode {
 pub struct DrawItem {
     pub model_matrix: glam::Mat4,
     pub normal_matrix: glam::Mat4,
+    /// Raw mesh handle (index into uploaded_meshes). Used by CPU-side code only.
     pub mesh: MeshHandle,
+    /// Raw material handle (index into material buffer).
     pub material: MaterialHandle,
+    /// Packed offsets for RT hit shader use:
+    ///   low  32 bits = vertex_offset (first vertex in the global VB for this mesh, as u32)
+    ///   high 32 bits = index_offset  (first index in the global IB for this mesh)
+    pub mesh_offsets: u64,
 }
 
-#[derive(Copy, Clone)]
+/// An uploaded mesh, including its pre-built BLAS for ray tracing.
 pub struct UploadedMesh {
     pub vertex_offset: i32,
     pub index_offset: u32,
     pub index_count: u32,
+    /// BLAS built once at mesh upload time.
+    pub blas: AccelerationStructure,
 }
 
 pub struct TriMesh {

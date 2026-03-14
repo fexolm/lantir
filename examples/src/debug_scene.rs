@@ -4,9 +4,9 @@
 ///   cargo run --bin debug_scene
 ///   LANTIR_DUMP_FRAME=debug/frames/out.png cargo run --bin debug_scene
 ///
-/// The binary loads `basicmesh.glb` + the sunset skybox, positions a fixed
-/// camera, waits for two frames (so the renderer is fully initialized), dumps
-/// the color buffer, and exits.
+/// The binary loads the car scene (porsche.glb + drift_track.glb + sunset.exr skybox),
+/// positions a fixed camera with a front-left view of the car, waits for a few frames
+/// (so the renderer is fully initialized), dumps the color buffer, and exits.
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::*;
 use lantir_bevy::LantirDefaultPlugins;
@@ -34,34 +34,34 @@ fn build_camera(eye: glam::Vec3, target: glam::Vec3) -> CameraTransform {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    let eye = glam::Vec3::new(5.0, 3.0, 8.0);
+    // Front-left view of the car scene.
+    let eye    = glam::Vec3::new(-6.0, 4.0, 8.0);
     let target = glam::Vec3::new(0.0, 1.0, 0.0);
     commands.spawn(Camera(build_camera(eye, target)));
 }
 
 // ── scene loading ─────────────────────────────────────────────────────────────
 
-/// Loads the scene once WorldRenderer is available. Uses a `SceneReady` marker
-/// instead of `run_once` so the system can safely skip frames where the
-/// renderer isn't initialized yet (e.g. Wayland sizing race).
 fn load_scene_system(
     world_renderer: Option<Res<WorldRenderer>>,
     scene_ready: Option<Res<SceneReady>>,
     mut commands: Commands,
 ) {
     if scene_ready.is_some() {
-        return; // already loaded
+        return;
     }
     let Some(world_renderer) = world_renderer else {
-        return; // renderer not ready yet
+        return;
     };
 
-    let scene = lantir_gltf::load_gltf(
-        &*world_renderer,
-        include_bytes!("../assets/basicmesh.glb"),
-    )
-    .expect("load basicmesh.glb");
-    scene.spawn(&mut commands);
+    // Load the drift track and the Porsche — same assets as the interactive example.
+    lantir_gltf::load_gltf(&*world_renderer, include_bytes!("../assets/drift_track.glb"))
+        .expect("load drift_track.glb")
+        .spawn(&mut commands);
+
+    lantir_gltf::load_gltf(&*world_renderer, include_bytes!("../assets/porsche.glb"))
+        .expect("load porsche.glb")
+        .spawn(&mut commands);
 
     world_renderer
         .resource_manager()
@@ -89,7 +89,6 @@ fn dump_and_exit_system(
     world_renderer: Option<Res<WorldRenderer>>,
     scene_ready: Option<Res<SceneReady>>,
 ) {
-    // Only start counting frames once the scene is loaded and renderer is up.
     if scene_ready.is_none() {
         return;
     }
@@ -99,8 +98,8 @@ fn dump_and_exit_system(
 
     state.frames_rendered += 1;
 
-    // Give the GPU two frames to finish uploading assets before readback.
-    if state.frames_rendered < 3 {
+    // Give the GPU a few frames to finish uploading assets and build the TLAS.
+    if state.frames_rendered < 5 {
         return;
     }
 
