@@ -8,7 +8,12 @@ use lantir_hal::{
 };
 
 use crate::{
-    render_pass::{RenderPass, pbr::PbrPass, rt::RtPass, sky::SkyPass},
+    render_pass::{
+        RenderPass,
+        geometry::GeometryPass,
+        rt::RtPass,
+        sky::SkyPass,
+    },
     resources::{PbrBlendMode, resource_manager::ResourceManager},
     scene::Scene,
 };
@@ -25,14 +30,21 @@ pub struct WorldRenderer {
 
     color_target: Arc<Texture>,
     depth_target: Arc<Texture>,
+
+    /// GBuffer: world-space normals (RGBA16F)
+    gbuf_normal: Arc<Texture>,
+    /// GBuffer: albedo (RGBA8)
+    gbuf_albedo: Arc<Texture>,
+    /// GBuffer: roughness (R) + metallic (G) (RG8)
+    gbuf_roughness_metal: Arc<Texture>,
+
     color_format: vk::Format,
     draw_extent: vk::Extent2D,
     window_extent: vk::Extent2D,
 
     sky_pass: SkyPass,
-    pbr_opaque_pass: PbrPass,
-    pbr_masked_pass: PbrPass,
-    pbr_transparent_pass: PbrPass,
+    geometry_opaque_pass: GeometryPass,
+    geometry_masked_pass: GeometryPass,
     rt_pass: RtPass,
 }
 
@@ -42,10 +54,9 @@ impl WorldRenderer {
 
         let draw_extent = config.draw_extent;
         let window_extent = config.window_extent;
-
         let color_format = vk::Format::B8G8R8A8_UNORM;
 
-        // Color target needs STORAGE usage so the RT pass can write to it as a storage image.
+        // Main color target (skybox + RT composite output)
         let color_target = Arc::new(Texture::new(
             engine.clone(),
             &TextureCreateInfo {
@@ -67,6 +78,7 @@ impl WorldRenderer {
             },
         )?);
 
+        // Depth target (shared between sky and geometry passes)
         let depth_target = Arc::new(Texture::new(
             engine.clone(),
             &TextureCreateInfo {
@@ -78,29 +90,66 @@ impl WorldRenderer {
                     height: draw_extent.height,
                     depth: 1,
                 },
-                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::DEPTH,
                 mip_levels: 1,
             },
         )?);
 
-        let pbr_opaque_pass = PbrPass::new(
-            &engine,
-            &resource_manager,
-            color_format,
-            color_target.clone(),
-            depth_target.clone(),
-            PbrBlendMode::Opaque,
-        )?;
+        // GBuffer: normal (RGBA16F) — written by geometry pass, read by RT raygen
+        let gbuf_normal = Arc::new(Texture::new(
+            engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::PerFrame,
+                format: vk::Format::R16G16B16A16_SFLOAT,
+                extent: vk::Extent3D {
+                    width: draw_extent.width,
+                    height: draw_extent.height,
+                    depth: 1,
+                },
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            },
+        )?);
 
-        let pbr_masked_pass = PbrPass::new(
-            &engine,
-            &resource_manager,
-            color_format,
-            color_target.clone(),
-            depth_target.clone(),
-            PbrBlendMode::Masked,
-        )?;
+        // GBuffer: albedo (RGBA8)
+        let gbuf_albedo = Arc::new(Texture::new(
+            engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::PerFrame,
+                format: vk::Format::R8G8B8A8_UNORM,
+                extent: vk::Extent3D {
+                    width: draw_extent.width,
+                    height: draw_extent.height,
+                    depth: 1,
+                },
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            },
+        )?);
+
+        // GBuffer: roughness/metallic (RG8)
+        let gbuf_roughness_metal = Arc::new(Texture::new(
+            engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::PerFrame,
+                format: vk::Format::R8G8_UNORM,
+                extent: vk::Extent3D {
+                    width: draw_extent.width,
+                    height: draw_extent.height,
+                    depth: 1,
+                },
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            },
+        )?);
 
         let sky_pass = SkyPass::new(
             &engine,
@@ -110,13 +159,24 @@ impl WorldRenderer {
             depth_target.clone(),
         )?;
 
-        let pbr_transparent_pass = PbrPass::new(
+        let geometry_opaque_pass = GeometryPass::new(
             &engine,
             &resource_manager,
-            color_format,
-            color_target.clone(),
+            gbuf_normal.clone(),
+            gbuf_albedo.clone(),
+            gbuf_roughness_metal.clone(),
             depth_target.clone(),
-            PbrBlendMode::Transparent,
+            PbrBlendMode::Opaque,
+        )?;
+
+        let geometry_masked_pass = GeometryPass::new(
+            &engine,
+            &resource_manager,
+            gbuf_normal.clone(),
+            gbuf_albedo.clone(),
+            gbuf_roughness_metal.clone(),
+            depth_target.clone(),
+            PbrBlendMode::Masked,
         )?;
 
         let rt_pass = RtPass::new(
@@ -124,6 +184,10 @@ impl WorldRenderer {
             &resource_manager,
             draw_extent,
             color_target.clone(),
+            gbuf_normal.clone(),
+            gbuf_albedo.clone(),
+            gbuf_roughness_metal.clone(),
+            depth_target.clone(),
         )?;
 
         Ok(Self {
@@ -131,13 +195,15 @@ impl WorldRenderer {
             resource_manager,
             color_target,
             depth_target,
+            gbuf_normal,
+            gbuf_albedo,
+            gbuf_roughness_metal,
             color_format,
             draw_extent,
             window_extent,
             sky_pass,
-            pbr_opaque_pass,
-            pbr_masked_pass,
-            pbr_transparent_pass,
+            geometry_opaque_pass,
+            geometry_masked_pass,
             rt_pass,
         })
     }
@@ -177,15 +243,56 @@ impl WorldRenderer {
     }
 
     fn run_passes(&self, cb: &CommandBuffer, scene: &Scene) -> anyhow::Result<()> {
-        self.sky_pass.prepare(self, scene)?;
-        self.pbr_opaque_pass.prepare(self, scene)?;
-        self.pbr_masked_pass.prepare(self, scene)?;
-        self.pbr_transparent_pass.prepare(self, scene)?;
-
+        // SkyPass: clears color_target and depth_target, renders skybox into color_target.
+        // The depth buffer is populated here (reverse-Z, sky writes no depth so depth stays 0).
         self.sky_pass.execute(self, scene, cb)?;
-        self.pbr_opaque_pass.execute(self, scene, cb)?;
-        self.pbr_masked_pass.execute(self, scene, cb)?;
-        self.pbr_transparent_pass.execute(self, scene, cb)?;
+
+        // Geometry passes: write GBuffer from depth-tested geometry.
+        // The depth from SkyPass is reused (LOAD).
+        // GBuffer attachments are cleared by the opaque pass (CLEAR load op on first use).
+        self.geometry_opaque_pass.execute(self, scene, cb)?;
+        self.geometry_masked_pass.execute(self, scene, cb)?;
+
+        // After geometry passes, transition GBuffer color attachments to SHADER_READ_ONLY_OPTIMAL
+        // so the RT pass can read them as sampled images. The descriptor was written with
+        // SHADER_READ_ONLY_OPTIMAL layout, so the actual image layout must match at trace time.
+        for tex in [
+            &*self.gbuf_normal,
+            &*self.gbuf_albedo,
+            &*self.gbuf_roughness_metal,
+        ] {
+            cb.cmd_image_barrier(
+                &self.engine,
+                &ImageBarrier {
+                    previous_accesses: &[AccessType::ColorAttachmentWrite],
+                    next_accesses: &[
+                        AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+                    ],
+                    previous_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    next_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    image: tex,
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                },
+            );
+        }
+
+        // Transition depth to DEPTH_READ_ONLY_OPTIMAL for the RT pass sampled read.
+        cb.cmd_image_barrier(
+            &self.engine,
+            &ImageBarrier {
+                previous_accesses: &[AccessType::DepthStencilAttachmentWrite],
+                next_accesses: &[
+                    AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
+                ],
+                previous_layout: vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
+                next_layout: vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL,
+                image: &*self.depth_target,
+                aspect_mask: vk::ImageAspectFlags::DEPTH,
+            },
+        );
+
+        // RT pass: reads GBuffer (now in SHADER_READ_ONLY_OPTIMAL / DEPTH_READ_ONLY_OPTIMAL),
+        // traces shadow rays, writes final lit image into color_target.
         self.rt_pass.execute(self, scene, cb)?;
 
         Ok(())
@@ -275,6 +382,7 @@ impl WorldRenderer {
         cb.cmd_set_viewport(&self.engine, self.draw_extent);
         cb.cmd_set_scissor(&self.engine, self.draw_extent);
 
+        // Transition color_target to COLOR_ATTACHMENT_OPTIMAL for the sky pass.
         cb.cmd_image_barrier(
             &self.engine,
             &ImageBarrier {
@@ -286,7 +394,7 @@ impl WorldRenderer {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );
-
+        // Transition depth to DEPTH_ATTACHMENT_OPTIMAL for the sky + geometry passes.
         cb.cmd_image_barrier(
             &self.engine,
             &ImageBarrier {
@@ -298,6 +406,25 @@ impl WorldRenderer {
                 aspect_mask: vk::ImageAspectFlags::DEPTH,
             },
         );
+
+        // Transition GBuffer attachments to COLOR_ATTACHMENT_OPTIMAL for the geometry pass.
+        for tex in [
+            &*self.gbuf_normal,
+            &*self.gbuf_albedo,
+            &*self.gbuf_roughness_metal,
+        ] {
+            cb.cmd_image_barrier(
+                &self.engine,
+                &ImageBarrier {
+                    previous_accesses: &[AccessType::Nothing],
+                    next_accesses: &[AccessType::ColorAttachmentWrite],
+                    previous_layout: vk::ImageLayout::UNDEFINED,
+                    next_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    image: tex,
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                },
+            );
+        }
 
         self.resource_manager
             .set_draw_items(scene.draw_items)
@@ -320,7 +447,7 @@ impl WorldRenderer {
         self.run_passes(cb, scene).context("run_passes")?;
 
         // After run_passes, color_target is in COLOR_ATTACHMENT_OPTIMAL
-        // (either from rasterization or from the RT pass barrier).
+        // (left in that state after RtPass copies rt_output into it).
         cb.cmd_image_barrier(
             &self.engine,
             &ImageBarrier {
@@ -345,13 +472,14 @@ impl WorldRenderer {
             },
         );
 
-        {
-            let copy_extent: vk::Extent2D = vk::Extent2D {
-                width: self.window_extent.width.min(self.draw_extent.width),
-                height: self.window_extent.height.min(self.draw_extent.height),
-            };
+        let copy_extent = vk::Extent2D {
+            width: self.window_extent.width.min(self.draw_extent.width),
+            height: self.window_extent.height.min(self.draw_extent.height),
+        };
 
-            let copy_image_info = CopyImageInfo {
+        cb.cmd_copy_image(
+            &self.engine,
+            &CopyImageInfo {
                 src_image: &*self.color_target,
                 src_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 src_aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -360,10 +488,8 @@ impl WorldRenderer {
                 dst_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 dst_aspect_mask: vk::ImageAspectFlags::COLOR,
                 dst_extent: copy_extent,
-            };
-
-            cb.cmd_copy_image(&self.engine, &copy_image_info);
-        }
+            },
+        );
 
         cb.cmd_image_barrier(
             &self.engine,

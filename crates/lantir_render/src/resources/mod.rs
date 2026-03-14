@@ -45,6 +45,9 @@ pub struct Vertex {
     pub normal: glam::Vec3,
     pub color: glam::Vec4,
     pub uv: glam::Vec2,
+    /// Tangent in model space. xyz = tangent direction, w = bitangent sign (+1 or -1).
+    /// Must match the `float4 tangent` field in common.hlsli `Vertex`.
+    pub tangent: glam::Vec4,
 }
 
 #[repr(C)]

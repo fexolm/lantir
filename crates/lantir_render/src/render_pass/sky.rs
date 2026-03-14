@@ -54,6 +54,7 @@ impl SkyPass {
                 cull_mode: vk::CullModeFlags::NONE,
                 front_face: vk::FrontFace::CLOCKWISE,
                 color_attachment_format: color_format,
+                extra_color_attachment_formats: &[],
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: false,
                 depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,

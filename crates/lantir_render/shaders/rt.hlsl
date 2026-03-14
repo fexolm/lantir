@@ -1,4 +1,7 @@
-// rt.hlsl — all RT entry points: raygeneration, miss, closesthit.
+// rt.hlsl — Deferred lighting + shadow ray tracing pass.
+// Reads GBuffer (normal, albedo, roughness/metallic, depth) written by the geometry pass.
+// Traces one shadow ray per pixel toward the sun. Outputs a fully lit HDR image.
+//
 // Compiled as a single lib_6_6 SPIR-V module by build.rs.
 
 #include "common.hlsli"
@@ -29,24 +32,20 @@ struct RtPushConstants
 [[vk::binding(5, 0)]] ConstantBuffer<Skybox>         skybox;
 [[vk::binding(6, 0)]] StructuredBuffer<uint>         ib;
 
-// TLAS lives in the meta set (set=0) at META_BUFFER_BINDING_TLAS = 7.
+// TLAS — for shadow ray tracing
 [[vk::binding(7, 0)]] RaytracingAccelerationStructure tlas;
 
 // ---------------------------------------------------------------------------
 // RT-private bindings (set=1)
 // ---------------------------------------------------------------------------
 [[vk::binding(0, 1)]] [[vk::image_format("bgra8")]] RWTexture2D<float4> color_out;
+[[vk::binding(1, 1)]] Texture2D<float4> gbuf_normal;          // encoded world normal (xyz*0.5+0.5, w unused)
+[[vk::binding(2, 1)]] Texture2D<float4> gbuf_albedo;          // base color RGBA
+[[vk::binding(3, 1)]] Texture2D<float2> gbuf_roughness_metal; // (roughness, metallic)
+[[vk::binding(4, 1)]] Texture2D<float>  gbuf_depth;           // reverse-Z depth (1=near, 0=far)
 
 // ---------------------------------------------------------------------------
-// Ray payload
-// ---------------------------------------------------------------------------
-struct RayPayload
-{
-    float4 color;
-};
-
-// ---------------------------------------------------------------------------
-// GGX / Cook-Torrance BRDF helpers (used by closesthit)
+// GGX / Cook-Torrance BRDF helpers
 // ---------------------------------------------------------------------------
 static const float PI = 3.14159265359;
 
@@ -77,12 +76,8 @@ float3 F_Schlick(float cosTheta, float3 F0)
 }
 
 float3 pbr_direct_light(
-    float3 N,
-    float3 V,
-    float3 L,
-    float3 albedo,
-    float  metallic,
-    float  roughness,
+    float3 N, float3 V, float3 L,
+    float3 albedo, float metallic, float roughness,
     float3 light_color)
 {
     float NdotL = saturate(dot(N, L));
@@ -101,184 +96,167 @@ float3 pbr_direct_light(
     float3 F = F_Schlick(HdotV, F0);
 
     float3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
-
-    float3 kD      = (1.0 - F) * (1.0 - metallic);
-    float3 diffuse = kD * albedo / PI;
+    float3 kD       = (1.0 - F) * (1.0 - metallic);
+    float3 diffuse  = kD * albedo / PI;
 
     return (diffuse + specular) * NdotL * light_color;
 }
 
+// Reconstruct world-space position from a pixel's reverse-Z depth value.
+// ndc_xy: pixel NDC xy in [-1,1]. depth: reverse-Z depth (0=far, 1=near).
+float3 reconstruct_world_pos(float2 ndc_xy, float depth, float4x4 inv_viewproj)
+{
+    float4 clip = float4(ndc_xy, depth, 1.0);
+    float4 world = mul(inv_viewproj, clip);
+    return world.xyz / world.w;
+}
+
 // ---------------------------------------------------------------------------
-// Raygen entry point
+// Shadow ray payload — visibility flag only
+// ---------------------------------------------------------------------------
+struct ShadowPayload
+{
+    float visibility; // 1.0 = lit, 0.0 = shadowed
+};
+
+// ---------------------------------------------------------------------------
+// Raygen: read GBuffer, reconstruct world pos from depth, shade + trace shadow
 // ---------------------------------------------------------------------------
 [shader("raygeneration")]
 void raygen_main()
 {
     uint2 pixel = DispatchRaysIndex().xy;
-
     if (pixel.x >= pc.width || pixel.y >= pc.height)
         return;
 
-    // Map pixel centre to NDC (Vulkan NDC has Y pointing down).
+    const uint INVALID = 0xFFFFFFFFu;
+
+    // Sample GBuffer at this pixel (integer load, no filtering needed)
+    float4 gbuf_n  = gbuf_normal.Load(int3(pixel, 0));
+    float4 gbuf_a  = gbuf_albedo.Load(int3(pixel, 0));
+    float2 gbuf_rm = gbuf_roughness_metal.Load(int3(pixel, 0));
+    float  depth   = gbuf_depth.Load(int3(pixel, 0));
+
+    // Compute pixel NDC coordinates
     float2 uv  = (float2(pixel) + 0.5) / float2(pc.width, pc.height);
     float2 ndc = uv * 2.0 - 1.0;
 
-    // Reconstruct ray from inverse view-projection.
-    // Reverse-Z: NDC Z=1 at near plane, Z=0 at infinity.
-    float4 near_world = mul(pc.inv_viewproj, float4(ndc, 1.0, 1.0));
-    float4 mid_world  = mul(pc.inv_viewproj, float4(ndc, 0.5, 1.0));
-    near_world /= near_world.w;
-    mid_world  /= mid_world.w;
-
-    float3 ray_origin    = near_world.xyz;
-    float3 ray_direction = normalize(mid_world.xyz - near_world.xyz);
-
-    RayDesc ray;
-    ray.Origin    = ray_origin;
-    ray.Direction = ray_direction;
-    ray.TMin      = 0.001;
-    ray.TMax      = 10000.0;
-
-    RayPayload payload;
-    payload.color = float4(0.0, 0.0, 0.0, 1.0);
-
-    TraceRay(
-        tlas,
-        RAY_FLAG_NONE,
-        0xFF,  // instance mask
-        0,     // hit group SBT offset
-        1,     // hit group SBT stride
-        0,     // miss SBT index
-        ray,
-        payload
-    );
-
-    color_out[pixel] = payload.color;
-}
-
-// ---------------------------------------------------------------------------
-// Miss entry point
-// ---------------------------------------------------------------------------
-[shader("miss")]
-void miss_main(inout RayPayload payload)
-{
-    const uint INVALID = 0xFFFFFFFFu;
-
-    float3 dir = normalize(WorldRayDirection());
-
-    if (skybox.tex != INVALID && skybox.sampler != INVALID)
+    // Sky pixel: normal encodes (0,0,0) in [0,1] space → stored value ~(0.5,0.5,0.5),
+    // but we cleared gbuf_normal to (0,0,0,0) — so detect with w==0 or zero normal length.
+    // Depth == 0.0 means far plane (reverse-Z) → sky.
+    if (depth <= 0.0 || dot(gbuf_n.xyz, gbuf_n.xyz) < 0.001)
     {
-        int texIndex  = clamp((int)skybox.tex,    0, 1023);
-        int sampIndex = clamp((int)skybox.sampler, 0, 1023);
-        float2 uv = dir_to_equirect_uv(dir);
-        float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex], uv, 0).rgb;
-        hdr *= skybox.exposure;
-        float3 color = saturate(tonemap_reinhard(hdr));
-        payload.color = float4(color, 1.0);
-    }
-    else
-    {
-        float t = 0.5 * (dir.y + 1.0);
-        float3 color = lerp(float3(0.3, 0.3, 0.3), float3(0.1, 0.2, 0.5), t);
-        payload.color = float4(color, 1.0);
-    }
-}
+        // Sky pixel — sample skybox in the view direction
+        float4 near_w = mul(pc.inv_viewproj, float4(ndc, 1.0, 1.0));
+        float4 far_w  = mul(pc.inv_viewproj, float4(ndc, 0.0, 1.0));
+        near_w /= near_w.w;
+        far_w  /= far_w.w;
+        float3 ray_dir = normalize(far_w.xyz - near_w.xyz);
 
-// ---------------------------------------------------------------------------
-// Closest-hit entry point
-// ---------------------------------------------------------------------------
-[shader("closesthit")]
-void hit_main(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attr)
-{
-    const uint INVALID = 0xFFFFFFFFu;
-
-    // InstanceID() == draw_item_index set as instance_custom_index in build_tlas_for_items.
-    uint draw_item_idx = InstanceID();
-    DrawItem item      = dib[draw_item_idx];
-    uint mat_idx       = item.material.x;
-
-    // DrawItem.mesh_offsets packed by ResourceManager::pack_mesh_offsets():
-    //   .x = vertex_offset, .y = index_offset
-    uint vertex_offset = item.mesh_offsets.x;
-    uint index_offset  = item.mesh_offsets.y;
-
-    // Barycentric weights.
-    float w1 = attr.barycentrics.x;
-    float w2 = attr.barycentrics.y;
-    float w0 = 1.0 - w1 - w2;
-
-    // Look up indices of the hit triangle.
-    uint prim_idx = PrimitiveIndex();
-    uint i0 = ib[index_offset + prim_idx * 3 + 0];
-    uint i1 = ib[index_offset + prim_idx * 3 + 1];
-    uint i2 = ib[index_offset + prim_idx * 3 + 2];
-
-    Vertex v0 = vb[vertex_offset + i0];
-    Vertex v1 = vb[vertex_offset + i1];
-    Vertex v2 = vb[vertex_offset + i2];
-
-    // Interpolate vertex attributes.
-    float3 local_normal = normalize(v0.normal * w0 + v1.normal * w1 + v2.normal * w2);
-    float2 uv           = v0.uv * w0 + v1.uv * w1 + v2.uv * w2;
-    float4 vert_color   = v0.color * w0 + v1.color * w1 + v2.color * w2;
-
-    // Transform normal to world space.
-    float3 world_normal = normalize(mul((float3x3)item.normal_matrix, local_normal));
-
-    // Two-sided shading.
-    if (dot(world_normal, -WorldRayDirection()) < 0.0)
-        world_normal = -world_normal;
-
-    // Material lookup.
-    float4 base_color = vert_color;
-    float  metallic   = 0.0;
-    float  roughness  = 0.5;
-
-    if (mat_idx != INVALID)
-    {
-        PbrMaterial mat = materials[mat_idx];
-        base_color *= mat.base_color;
-        metallic    = mat.metallness;
-        roughness   = mat.roughness;
-
-        uint albedoId      = mat.albedo_tex.x;
-        uint albedoSampler = mat.albedo_sampler.x;
-        if (albedoId != INVALID && albedoSampler != INVALID)
+        if (skybox.tex != INVALID && skybox.sampler != INVALID)
         {
-            int texIdx  = clamp((int)albedoId,      0, 1023);
-            int sampIdx = clamp((int)albedoSampler,  0, 1023);
-            base_color *= textures[texIdx].SampleLevel(samplers[sampIdx], uv, 0);
+            int texIndex  = clamp((int)skybox.tex,    0, 1023);
+            int sampIndex = clamp((int)skybox.sampler, 0, 1023);
+            float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex],
+                             dir_to_equirect_uv(ray_dir), 0).rgb;
+            hdr *= skybox.exposure;
+            color_out[pixel] = float4(saturate(tonemap_reinhard(hdr)), 1.0);
         }
+        else
+        {
+            float t = 0.5 * (ray_dir.y + 1.0);
+            color_out[pixel] = float4(lerp(float3(0.3, 0.3, 0.3), float3(0.1, 0.2, 0.5), t), 1.0);
+        }
+        return;
     }
 
-    float3 albedo = base_color.rgb;
-    roughness = max(roughness, 0.04);
+    // Decode GBuffer
+    float3 N        = normalize(gbuf_n.xyz * 2.0 - 1.0);
+    float3 albedo   = gbuf_a.rgb;
+    float  roughness = max(gbuf_rm.x, 0.04);
+    float  metallic  = gbuf_rm.y;
 
-    // Direct sun lighting.
-    float3 hit_pos   = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    float3 V         = normalize(pc.camera_pos.xyz - hit_pos);
-    float3 sun_dir   = normalize(float3(0.4, 1.0, 0.3));
+    // Reconstruct world-space position from reverse-Z depth
+    float3 hit_pos = reconstruct_world_pos(ndc, depth, pc.inv_viewproj);
+
+    float3 V = normalize(pc.camera_pos.xyz - hit_pos);
+
+    // Sun parameters (fixed directional light)
+    float3 sun_dir = normalize(float3(0.1, 1.0, 0.0));
     float3 sun_color = float3(1.0, 0.95, 0.85) * 3.0;
 
-    float3 direct = pbr_direct_light(world_normal, V, sun_dir, albedo, metallic, roughness, sun_color);
+    // Shadow ray toward the sun
+    float shadow_visibility = 1.0;
+    {
+        RayDesc shadow_ray;
+        shadow_ray.Origin    = hit_pos + N * 0.005; // normal-offset bias
+        shadow_ray.Direction = sun_dir;
+        shadow_ray.TMin      = 0.001;
+        shadow_ray.TMax      = 10000.0;
 
-    // Sky ambient.
+        ShadowPayload shadow;
+        shadow.visibility = 0.0; // default: shadowed; miss shader sets 1.0 if unoccluded
+
+        TraceRay(
+            tlas,
+            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+            0xFF,
+            0,   // sbt_offset (hit group 0, but skipped by flag)
+            1,   // sbt_stride
+            0,   // miss index 0 → shadow_miss_main
+            shadow_ray,
+            shadow
+        );
+        shadow_visibility = shadow.visibility;
+    }
+
+    // PBR shading
+    float3 direct = shadow_visibility
+        * pbr_direct_light(N, V, sun_dir, albedo, metallic, roughness, sun_color);
+
+    // Skybox ambient (sample along surface normal)
     float3 ambient = float3(0.03, 0.03, 0.03) * albedo;
     if (skybox.tex != INVALID && skybox.sampler != INVALID)
     {
         int texIndex  = clamp((int)skybox.tex,    0, 1023);
         int sampIndex = clamp((int)skybox.sampler, 0, 1023);
         float3 hdr = textures[texIndex].SampleLevel(samplers[sampIndex],
-                         dir_to_equirect_uv(world_normal), 0).rgb;
+                         dir_to_equirect_uv(N), 0).rgb;
         hdr *= skybox.exposure;
         float3 amb = saturate(tonemap_reinhard(hdr));
         ambient = albedo * (skybox.ambient_floor + (1.0 - skybox.ambient_floor) * amb);
     }
 
-    float3 final_color = ambient + direct;
+    float3 final_color = linear_to_srgb(ambient + direct);
+    color_out[pixel] = float4(final_color, 1.0);
+}
 
-    // Gamma correction: linear -> sRGB.
-    final_color = linear_to_srgb(final_color);
+// ---------------------------------------------------------------------------
+// Shadow miss — ray reached the light unoccluded: lit
+// ---------------------------------------------------------------------------
+[shader("miss")]
+void shadow_miss_main(inout ShadowPayload payload)
+{
+    payload.visibility = 1.0;
+}
 
-    payload.color = float4(final_color, base_color.a);
+// ---------------------------------------------------------------------------
+// Primary miss — no geometry at this pixel (unused in this deferred pipeline,
+// but required as the SBT's second miss entry for correctness)
+// ---------------------------------------------------------------------------
+[shader("miss")]
+void primary_miss_main(inout ShadowPayload payload)
+{
+    payload.visibility = 0.0;
+}
+
+// ---------------------------------------------------------------------------
+// Primary closest-hit — unused in deferred pipeline (shadow rays skip CHit).
+// Needed in the SBT hit region so the pipeline has a valid hit group.
+// ---------------------------------------------------------------------------
+[shader("closesthit")]
+void primary_hit_main(inout ShadowPayload payload, BuiltInTriangleIntersectionAttributes attr)
+{
+    // Shadow ray hit geometry → occluded
+    payload.visibility = 0.0;
 }

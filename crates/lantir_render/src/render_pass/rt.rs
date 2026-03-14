@@ -4,8 +4,9 @@ use anyhow::Context;
 
 use lantir_hal::{
     AccessType, CommandBuffer, CopyImageInfo, DescriptorSet, DescriptorSetBinding,
-    DescriptorSetLayout, ImageBarrier, PipelineLayout, RayTracingPipeline, RenderEngine, Shader,
-    Texture, TextureCreateInfo, UpdateFrequency, WriteImageInfo, vk,
+    DescriptorSetLayout, ImageBarrier, PipelineLayout, RayTracingPipeline, RenderEngine,
+    RtSbtDesc, RtShaderStage, Shader, Texture, TextureCreateInfo,
+    UpdateFrequency, WriteImageInfo, vk,
 };
 
 use crate::{
@@ -35,37 +36,77 @@ struct RtPushConstants {
 pub struct RtPass {
     pipeline: RayTracingPipeline,
     pipeline_layout: Arc<PipelineLayout>,
-    // set=1: storage image output only. TLAS is in set=0 (meta DS, binding 7).
+    /// set=1: storage image output + GBuffer sampled images + depth sampled image
     descriptor_set: DescriptorSet,
-    // Static output texture written by traceRays, then copied into the per-frame color_target.
-    // Transitioned UNDEFINED→GENERAL once in new() via immediate_submit.
+    /// RT output storage image (written by traceRays, then blitted to color_target)
     rt_output: Texture,
     draw_extent: vk::Extent2D,
     color_target: Arc<Texture>,
+    /// Held to extend lifetime; actual image handle is baked into the descriptor set.
+    #[allow(dead_code)]
+    gbuf_normal: Arc<Texture>,
+    #[allow(dead_code)]
+    gbuf_albedo: Arc<Texture>,
+    #[allow(dead_code)]
+    gbuf_roughness_metal: Arc<Texture>,
+    #[allow(dead_code)]
+    depth_target: Arc<Texture>,
 }
 
 impl RtPass {
-    /// TLAS is owned by ResourceManager and bound via the meta descriptor set (set=0, binding=7).
-    /// All static descriptors (storage image) are written here.
     pub fn new(
         engine: &Arc<RenderEngine>,
         resource_manager: &Arc<ResourceManager>,
         draw_extent: vk::Extent2D,
         color_target: Arc<Texture>,
+        gbuf_normal: Arc<Texture>,
+        gbuf_albedo: Arc<Texture>,
+        gbuf_roughness_metal: Arc<Texture>,
+        depth_target: Arc<Texture>,
     ) -> anyhow::Result<Self> {
         let shader = Shader::new_u32(engine.clone(), include_shader!("rt.hlsl"))
             .context("rt shader")?;
 
-        // set=1: binding 0 = storage image (RT output).
-        // TLAS lives in set=0 (meta descriptor set), binding META_BUFFER_BINDING_TLAS.
+        // set=1 layout:
+        //   binding 0: STORAGE_IMAGE    (rt_output, written by raygen)
+        //   binding 1: SAMPLED_IMAGE    (gbuf_normal)
+        //   binding 2: SAMPLED_IMAGE    (gbuf_albedo)
+        //   binding 3: SAMPLED_IMAGE    (gbuf_roughness_metal)
+        //   binding 4: SAMPLED_IMAGE    (depth_target, for world-position reconstruction)
         let rt_ds_layout = DescriptorSetLayout::new(
             engine.clone(),
-            &[DescriptorSetBinding {
-                typ: vk::DescriptorType::STORAGE_IMAGE,
-                binding: 0,
-                stage: vk::ShaderStageFlags::RAYGEN_KHR,
-                count: 1,
-            }],
+            &[
+                DescriptorSetBinding {
+                    typ: vk::DescriptorType::STORAGE_IMAGE,
+                    binding: 0,
+                    stage: vk::ShaderStageFlags::RAYGEN_KHR,
+                    count: 1,
+                },
+                DescriptorSetBinding {
+                    typ: vk::DescriptorType::SAMPLED_IMAGE,
+                    binding: 1,
+                    stage: vk::ShaderStageFlags::RAYGEN_KHR,
+                    count: 1,
+                },
+                DescriptorSetBinding {
+                    typ: vk::DescriptorType::SAMPLED_IMAGE,
+                    binding: 2,
+                    stage: vk::ShaderStageFlags::RAYGEN_KHR,
+                    count: 1,
+                },
+                DescriptorSetBinding {
+                    typ: vk::DescriptorType::SAMPLED_IMAGE,
+                    binding: 3,
+                    stage: vk::ShaderStageFlags::RAYGEN_KHR,
+                    count: 1,
+                },
+                DescriptorSetBinding {
+                    typ: vk::DescriptorType::SAMPLED_IMAGE,
+                    binding: 4,
+                    stage: vk::ShaderStageFlags::RAYGEN_KHR,
+                    count: 1,
+                },
+            ],
         )
         .context("RT DS layout")?;
 
@@ -77,7 +118,6 @@ impl RtPass {
             size: std::mem::size_of::<RtPushConstants>() as u32,
         }];
 
-        // set 0 = meta (scene buffers + TLAS), set 1 = RT-private (storage image)
         let pipeline_layout = PipelineLayout::new(
             engine.clone(),
             vec![
@@ -88,9 +128,79 @@ impl RtPass {
         )
         .context("RT pipeline layout")?;
 
-        let pipeline = RayTracingPipeline::new(engine.clone(), pipeline_layout.clone(), shader)
-            .context("RT pipeline")?;
+        // Build RT pipeline with 4 shader groups:
+        //   group 0: raygen_main           (raygen)
+        //   group 1: shadow_miss_main      (miss, SBT index 0 in miss region)
+        //   group 2: primary_miss_main     (miss, SBT index 1 in miss region)
+        //   group 3: primary_hit_main      (closesthit, SBT index 0 in hit region)
+        let stages = [
+            RtShaderStage {
+                stage: vk::ShaderStageFlags::RAYGEN_KHR,
+                shader: &shader,
+                entry_point: c"raygen_main",
+            },
+            RtShaderStage {
+                stage: vk::ShaderStageFlags::MISS_KHR,
+                shader: &shader,
+                entry_point: c"shadow_miss_main",
+            },
+            RtShaderStage {
+                stage: vk::ShaderStageFlags::MISS_KHR,
+                shader: &shader,
+                entry_point: c"primary_miss_main",
+            },
+            RtShaderStage {
+                stage: vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                shader: &shader,
+                entry_point: c"primary_hit_main",
+            },
+        ];
 
+        let groups = [
+            // group 0: raygen
+            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                .general_shader(0)
+                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                .intersection_shader(vk::SHADER_UNUSED_KHR),
+            // group 1: shadow miss
+            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                .general_shader(1)
+                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                .intersection_shader(vk::SHADER_UNUSED_KHR),
+            // group 2: primary miss
+            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                .general_shader(2)
+                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                .intersection_shader(vk::SHADER_UNUSED_KHR),
+            // group 3: primary closesthit
+            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                .general_shader(vk::SHADER_UNUSED_KHR)
+                .closest_hit_shader(3)
+                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                .intersection_shader(vk::SHADER_UNUSED_KHR),
+        ];
+
+        let pipeline = RayTracingPipeline::new_custom(
+            engine.clone(),
+            pipeline_layout.clone(),
+            &stages,
+            &groups,
+            RtSbtDesc {
+                num_miss_groups: 2,
+                num_hit_groups: 1,
+            },
+            2, // primary ray + shadow ray recursion
+        )
+        .context("RT pipeline")?;
+
+        // RT output storage image
         let rt_output = Texture::new(
             engine.clone(),
             &TextureCreateInfo {
@@ -109,20 +219,16 @@ impl RtPass {
         )
         .context("rt_output texture")?;
 
+
         let descriptor_set =
             DescriptorSet::new(engine.clone(), rt_ds_layout).context("RT DS alloc")?;
 
-        descriptor_set.write_image(&WriteImageInfo {
-            binding: 0,
-            image: &rt_output,
-            layout: vk::ImageLayout::GENERAL,
-            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
-            sampler: None,
-            array_index: 0,
-        });
-
-        // Transition rt_output UNDEFINED→GENERAL once so execute() always sees GENERAL.
+        // Transition all descriptor images to their expected layouts before writing descriptors.
+        // The Vulkan validation layer (VUID-09600) checks that images are in the layout
+        // recorded in VkDescriptorImageInfo at the time the descriptor is written. By
+        // transitioning up-front we ensure a consistent baseline layout from frame one.
         engine.immediate_submit(|cb| {
+            // rt_output: UNDEFINED → GENERAL (storage image, stays GENERAL throughout)
             cb.cmd_image_barrier(
                 engine,
                 &ImageBarrier {
@@ -134,7 +240,86 @@ impl RtPass {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                 },
             );
+            // GBuffer color images: UNDEFINED → SHADER_READ_ONLY_OPTIMAL
+            // world_renderer will transition them UNDEFINED→COLOR_ATTACHMENT_OPTIMAL at the
+            // start of each frame (discarding content), then COLOR_ATTACHMENT_OPTIMAL→
+            // SHADER_READ_ONLY_OPTIMAL before the RT pass. This initial transition just
+            // sets the validation-layer-tracked baseline layout to match the descriptor.
+            for tex in [
+                &*gbuf_normal,
+                &*gbuf_albedo,
+                &*gbuf_roughness_metal,
+            ] {
+                cb.cmd_image_barrier(
+                    engine,
+                    &ImageBarrier {
+                        previous_accesses: &[AccessType::Nothing],
+                        next_accesses: &[AccessType::Nothing],
+                        previous_layout: vk::ImageLayout::UNDEFINED,
+                        next_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        image: tex,
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                    },
+                );
+            }
+            // Depth: UNDEFINED → DEPTH_READ_ONLY_OPTIMAL
+            cb.cmd_image_barrier(
+                engine,
+                &ImageBarrier {
+                    previous_accesses: &[AccessType::Nothing],
+                    next_accesses: &[AccessType::Nothing],
+                    previous_layout: vk::ImageLayout::UNDEFINED,
+                    next_layout: vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL,
+                    image: &*depth_target,
+                    aspect_mask: vk::ImageAspectFlags::DEPTH,
+                },
+            );
         })?;
+
+        descriptor_set.write_image(&WriteImageInfo {
+            binding: 0,
+            image: &rt_output,
+            layout: vk::ImageLayout::GENERAL,
+            descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+            sampler: None,
+            array_index: 0,
+        });
+        // GBuffer color images: descriptor layout matches SHADER_READ_ONLY_OPTIMAL transition above.
+        // world_renderer transitions them to this layout before each RT pass execution.
+        descriptor_set.write_image(&WriteImageInfo {
+            binding: 1,
+            image: &*gbuf_normal,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            sampler: None,
+            array_index: 0,
+        });
+        descriptor_set.write_image(&WriteImageInfo {
+            binding: 2,
+            image: &*gbuf_albedo,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            sampler: None,
+            array_index: 0,
+        });
+        descriptor_set.write_image(&WriteImageInfo {
+            binding: 3,
+            image: &*gbuf_roughness_metal,
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            sampler: None,
+            array_index: 0,
+        });
+        // Depth image: descriptor layout matches DEPTH_READ_ONLY_OPTIMAL transition above.
+        // world_renderer transitions it to this layout before each RT pass execution.
+        descriptor_set.write_image(&WriteImageInfo {
+            binding: 4,
+            image: &*depth_target,
+            layout: vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL,
+            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            sampler: None,
+            array_index: 0,
+        });
 
         Ok(Self {
             pipeline,
@@ -143,6 +328,10 @@ impl RtPass {
             rt_output,
             draw_extent,
             color_target,
+            gbuf_normal,
+            gbuf_albedo,
+            gbuf_roughness_metal,
+            depth_target,
         })
     }
 
@@ -155,7 +344,11 @@ impl RtPass {
         let engine = renderer.get_engine();
         let resource_manager = renderer.get_resource_manager();
 
-        // WAW barrier: previous frame's traceRays write must complete before this frame's.
+        // GBuffer and depth images are already in SHADER_READ_ONLY_OPTIMAL /
+        // DEPTH_READ_ONLY_OPTIMAL at this point — the barriers were emitted by
+        // world_renderer::run_passes before calling rt_pass.execute().
+
+        // WAW barrier for rt_output (previous frame → this frame)
         cb.cmd_image_barrier(
             engine,
             &ImageBarrier {
@@ -207,7 +400,11 @@ impl RtPass {
             self.draw_extent.height,
         );
 
-        // rt_output GENERAL → TRANSFER_SRC → copy into color_target → restore GENERAL
+        // GBuffer textures (SHADER_READ_ONLY_OPTIMAL) and depth (DEPTH_READ_ONLY_OPTIMAL) are
+        // left in their read-only layouts after the RT pass. world_renderer will re-initialize
+        // them from UNDEFINED next frame (discarding content), so no transition is needed here.
+
+        // rt_output GENERAL → TRANSFER_SRC → blit to color_target → restore
         cb.cmd_image_barrier(
             engine,
             &ImageBarrier {

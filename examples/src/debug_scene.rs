@@ -4,8 +4,8 @@
 ///   cargo run --bin debug_scene
 ///   LANTIR_DUMP_FRAME=debug/frames/out.png cargo run --bin debug_scene
 ///
-/// The binary loads the car scene (porsche.glb + drift_track.glb + sunset.exr skybox),
-/// positions a fixed camera with a front-left view of the car, waits for a few frames
+/// The binary loads the Sponza atrium (sponza.glb + sunset.exr skybox),
+/// positions a fixed camera inside the atrium, waits for a few frames
 /// (so the renderer is fully initialized), dumps the color buffer, and exits.
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::*;
@@ -34,9 +34,9 @@ fn build_camera(eye: glam::Vec3, target: glam::Vec3) -> CameraTransform {
 }
 
 fn spawn_camera(mut commands: Commands) {
-    // Front-left view of the car scene.
-    let eye    = glam::Vec3::new(-6.0, 4.0, 8.0);
-    let target = glam::Vec3::new(0.0, 1.0, 0.0);
+    // Inside the Sponza atrium, looking down the central colonnade.
+    let eye    = glam::Vec3::new(0.0, 2.0, 0.0);
+    let target = glam::Vec3::new(8.0, 2.0, 0.0);
     commands.spawn(Camera(build_camera(eye, target)));
 }
 
@@ -54,13 +54,9 @@ fn load_scene_system(
         return;
     };
 
-    // Load the drift track and the Porsche — same assets as the interactive example.
-    lantir_gltf::load_gltf(&*world_renderer, include_bytes!("../assets/drift_track.glb"))
-        .expect("load drift_track.glb")
-        .spawn(&mut commands);
-
-    lantir_gltf::load_gltf(&*world_renderer, include_bytes!("../assets/porsche.glb"))
-        .expect("load porsche.glb")
+    // Load the Sponza atrium.
+    lantir_gltf::load_gltf(&*world_renderer, include_bytes!("../assets/sponza.glb"))
+        .expect("load sponza.glb")
         .spawn(&mut commands);
 
     world_renderer

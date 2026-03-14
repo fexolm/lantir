@@ -135,7 +135,11 @@ pub struct GraphicsPipelineCreateInfo<'i> {
     pub polygon_mode: vk::PolygonMode,
     pub cull_mode: vk::CullModeFlags,
     pub front_face: vk::FrontFace,
+    /// Format of the first (or only) color attachment.
     pub color_attachment_format: vk::Format,
+    /// Additional color attachment formats beyond the first one.
+    /// When non-empty, the pipeline is created with 1 + extra.len() color attachments.
+    pub extra_color_attachment_formats: &'i [vk::Format],
     pub depth_format: vk::Format,
     pub enable_depth_write: bool,
     pub depth_compare_op: vk::CompareOp,
@@ -217,7 +221,18 @@ impl GraphicsPipelineData {
             .min_depth_bounds(0.)
             .max_depth_bounds(1.);
 
-        let color_blend_attachments = [create_color_blend_attachment(&create_info.blending_mode)];
+        // Build the full list of color attachment formats (first + extras).
+        let mut color_attachment_formats: Vec<vk::Format> =
+            Vec::with_capacity(1 + create_info.extra_color_attachment_formats.len());
+        color_attachment_formats.push(create_info.color_attachment_format);
+        color_attachment_formats.extend_from_slice(create_info.extra_color_attachment_formats);
+
+        // One blend attachment state per color attachment, all sharing the same blending_mode.
+        let single_blend = create_color_blend_attachment(&create_info.blending_mode);
+        let color_blend_attachments: Vec<vk::PipelineColorBlendAttachmentState> =
+            (0..color_attachment_formats.len())
+                .map(|_| single_blend)
+                .collect();
 
         let color_blending_state = vk::PipelineColorBlendStateCreateInfo::default()
             .logic_op_enable(false)
@@ -225,8 +240,6 @@ impl GraphicsPipelineData {
 
         let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
             .dynamic_states(&[vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR]);
-
-        let color_attachment_formats = [create_info.color_attachment_format];
 
         let vs_spec_info = create_info.vertex_specialization.as_ref().map(|spec| {
             vk::SpecializationInfo::default()
@@ -308,11 +321,6 @@ impl DeferDrop for GraphicsPipelineData {
 // RayTracingPipeline
 // ---------------------------------------------------------------------------
 
-/// Shader group indices within the ray tracing pipeline.
-const RAYGEN_GROUP_INDEX: u32 = 0;
-const MISS_GROUP_INDEX: u32 = 1;
-const HIT_GROUP_INDEX: u32 = 2;
-
 pub type RayTracingPipeline = Resource<RayTracingPipelineData>;
 
 pub struct RayTracingPipelineData {
@@ -327,15 +335,49 @@ pub struct RayTracingPipelineData {
     pub callable_region: vk::StridedDeviceAddressRegionKHR,
 }
 
+/// Description of one shader stage in a custom RT pipeline.
+pub struct RtShaderStage<'a> {
+    pub stage: vk::ShaderStageFlags,
+    pub shader: &'a Arc<Shader>,
+    /// Entry point name as a nul-terminated C string literal (e.g. `c"raygen_main"`).
+    pub entry_point: &'a std::ffi::CStr,
+}
+
+/// Description of the SBT regions for a custom RT pipeline.
+/// The caller is responsible for ensuring the counts match the groups passed to `new_custom`.
+pub struct RtSbtDesc {
+    /// Number of miss shader groups (consecutive in the groups slice after raygen).
+    pub num_miss_groups: u32,
+    /// Number of hit groups (consecutive in the groups slice after miss groups).
+    pub num_hit_groups: u32,
+}
+
 impl RayTracingPipeline {
-    /// Create a ray tracing pipeline from a single SPIR-V shader module (rt.hlsl) that contains
-    /// all three entry points: `raygen_main`, `miss_main`, and `hit_main`.
-    pub fn new(
+    /// Create a ray tracing pipeline with a fully custom set of shader stages and groups.
+    ///
+    /// `stages`: ordered list of (stage, shader, entry_point).
+    /// `groups`: VkRayTracingShaderGroupCreateInfoKHR — must reference stage indices matching `stages`.
+    ///   Layout convention: groups[0] = raygen, groups[1..1+num_miss] = miss, groups[1+num_miss..] = hit.
+    /// `sbt_desc`: counts for building the SBT.
+    /// `max_recursion_depth`: passed to VkRayTracingPipelineCreateInfoKHR.
+    pub fn new_custom(
         engine: Arc<RenderEngine>,
         layout: Arc<PipelineLayout>,
-        shader: Arc<Shader>,
+        stages: &[RtShaderStage<'_>],
+        groups: &[vk::RayTracingShaderGroupCreateInfoKHR<'_>],
+        sbt_desc: RtSbtDesc,
+        max_recursion_depth: u32,
     ) -> anyhow::Result<Self> {
-        let data = RayTracingPipelineData::new(&engine, layout, shader)?;
+        let shaders: Vec<Arc<Shader>> = stages.iter().map(|s| s.shader.clone()).collect();
+        let data = RayTracingPipelineData::new_custom(
+            &engine,
+            layout,
+            shaders,
+            stages,
+            groups,
+            sbt_desc,
+            max_recursion_depth,
+        )?;
         Ok(Resource::make(engine, data))
     }
 }
@@ -345,59 +387,37 @@ fn align_up_u64(value: u64, alignment: u64) -> u64 {
 }
 
 impl RayTracingPipelineData {
-    pub fn new(
+    /// Build a pipeline from an arbitrary set of shader stages and groups.
+    ///
+    /// Groups layout convention (matching SBT layout built here):
+    ///   groups[0]                            = raygen group (always exactly 1)
+    ///   groups[1 .. 1+num_miss]              = miss groups
+    ///   groups[1+num_miss .. 1+num_miss+num_hit] = hit groups
+    pub fn new_custom(
         engine: &Arc<RenderEngine>,
         layout: Arc<PipelineLayout>,
-        shader: Arc<Shader>,
+        shaders: Vec<Arc<Shader>>,
+        stages: &[RtShaderStage<'_>],
+        groups: &[vk::RayTracingShaderGroupCreateInfoKHR<'_>],
+        sbt_desc: RtSbtDesc,
+        max_recursion_depth: u32,
     ) -> anyhow::Result<Self> {
         let loader = &engine.ray_tracing_pipeline_loader;
 
-        // All three entry points come from the same SPIR-V module (rt.hlsl).
-        // Shader stages: raygen(0), miss(1), closesthit(2)
-        let stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::RAYGEN_KHR)
-                .module(shader.shader)
-                .name(c"raygen_main"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::MISS_KHR)
-                .module(shader.shader)
-                .name(c"miss_main"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                .module(shader.shader)
-                .name(c"hit_main"),
-        ];
-
-        // Shader groups: raygen, miss, hit
-        let groups = [
-            // Raygen group (index 0)
-            vk::RayTracingShaderGroupCreateInfoKHR::default()
-                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-                .general_shader(RAYGEN_GROUP_INDEX)
-                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-                .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                .intersection_shader(vk::SHADER_UNUSED_KHR),
-            // Miss group (index 1)
-            vk::RayTracingShaderGroupCreateInfoKHR::default()
-                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-                .general_shader(MISS_GROUP_INDEX)
-                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-                .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                .intersection_shader(vk::SHADER_UNUSED_KHR),
-            // Hit group (index 2): triangle hit group
-            vk::RayTracingShaderGroupCreateInfoKHR::default()
-                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-                .general_shader(vk::SHADER_UNUSED_KHR)
-                .closest_hit_shader(HIT_GROUP_INDEX)
-                .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                .intersection_shader(vk::SHADER_UNUSED_KHR),
-        ];
+        let vk_stages: Vec<vk::PipelineShaderStageCreateInfo<'_>> = stages
+            .iter()
+            .map(|s| {
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(s.stage)
+                    .module(s.shader.shader)
+                    .name(s.entry_point)
+            })
+            .collect();
 
         let pipeline_info = vk::RayTracingPipelineCreateInfoKHR::default()
-            .stages(&stages)
-            .groups(&groups)
-            .max_pipeline_ray_recursion_depth(1)
+            .stages(&vk_stages)
+            .groups(groups)
+            .max_pipeline_ray_recursion_depth(max_recursion_depth)
             .layout(layout.layout);
 
         let pipelines = unsafe {
@@ -412,61 +432,62 @@ impl RayTracingPipelineData {
         };
         let pipeline = pipelines[0];
 
-        // Query RT pipeline properties for SBT alignment.
         let rt_props = engine.ray_tracing_pipeline_properties();
         let handle_size = rt_props.shader_group_handle_size as u64;
         let handle_alignment = rt_props.shader_group_handle_alignment as u64;
         let base_alignment = rt_props.shader_group_base_alignment as u64;
 
-        // Each SBT entry stride is handle_size rounded up to handle_alignment.
         let entry_stride = align_up_u64(handle_size, handle_alignment);
 
-        // Raygen region: size == stride (Vulkan spec requirement for raygen).
-        // Miss and hit regions start at base_alignment boundaries.
-        let raygen_region_size = entry_stride;
-        let region_size = align_up_u64(entry_stride, base_alignment);
-        let miss_region_size = region_size;
-        let hit_region_size = region_size;
-
-        // Raygen must start at a base_alignment boundary (offset 0 is aligned).
-        // Miss starts after raygen, aligned to base_alignment.
-        let raygen_offset: u64 = 0;
-        let miss_offset = align_up_u64(raygen_offset + raygen_region_size, base_alignment);
-        let hit_offset = align_up_u64(miss_offset + miss_region_size, base_alignment);
-        let total_sbt_size = hit_offset + hit_region_size;
-
-        // Fetch handles from the driver.
         let num_groups = groups.len() as u32;
-        let handle_data_size = (handle_size as u32 * num_groups) as usize;
+        let num_miss = sbt_desc.num_miss_groups;
+        let num_hit = sbt_desc.num_hit_groups;
+
+        // Raygen region: exactly 1 entry
+        let raygen_size = entry_stride;
+        // Miss region: num_miss entries
+        let miss_size = align_up_u64(entry_stride * num_miss as u64, base_alignment);
+        // Hit region: num_hit entries
+        let hit_size = align_up_u64(entry_stride * num_hit as u64, base_alignment);
+
+        let raygen_offset: u64 = 0;
+        let miss_offset = align_up_u64(raygen_offset + raygen_size, base_alignment);
+        let hit_offset = align_up_u64(miss_offset + miss_size, base_alignment);
+        let total_size = hit_offset + hit_size;
+
+        let handle_data_size = (handle_size * num_groups as u64) as usize;
         let handles: Vec<u8> = unsafe {
-            loader.get_ray_tracing_shader_group_handles(
-                pipeline,
-                0,
-                num_groups,
-                handle_data_size,
-            )?
+            loader.get_ray_tracing_shader_group_handles(pipeline, 0, num_groups, handle_data_size)?
         };
 
-        // Build SBT host buffer.
-        let mut sbt_host = vec![0u8; total_sbt_size as usize];
+        let hs = handle_size as usize;
+        let es = entry_stride as usize;
+        let mut sbt_host = vec![0u8; total_size as usize];
 
-        // Copy raygen handle at raygen_offset
-        sbt_host[raygen_offset as usize..raygen_offset as usize + handle_size as usize]
-            .copy_from_slice(&handles[0..handle_size as usize]);
+        // Raygen handle (group 0)
+        sbt_host[raygen_offset as usize..raygen_offset as usize + hs]
+            .copy_from_slice(&handles[0..hs]);
 
-        // Copy miss handle at miss_offset
-        sbt_host[miss_offset as usize..miss_offset as usize + handle_size as usize]
-            .copy_from_slice(&handles[handle_size as usize..2 * handle_size as usize]);
+        // Miss handles (groups 1..1+num_miss)
+        for i in 0..num_miss as usize {
+            let src_start = (1 + i) * hs;
+            let dst_start = miss_offset as usize + i * es;
+            sbt_host[dst_start..dst_start + hs]
+                .copy_from_slice(&handles[src_start..src_start + hs]);
+        }
 
-        // Copy hit handle at hit_offset
-        sbt_host[hit_offset as usize..hit_offset as usize + handle_size as usize]
-            .copy_from_slice(&handles[2 * handle_size as usize..3 * handle_size as usize]);
+        // Hit handles (groups 1+num_miss .. 1+num_miss+num_hit)
+        for i in 0..num_hit as usize {
+            let src_start = (1 + num_miss as usize + i) * hs;
+            let dst_start = hit_offset as usize + i * es;
+            sbt_host[dst_start..dst_start + hs]
+                .copy_from_slice(&handles[src_start..src_start + hs]);
+        }
 
-        // Upload SBT to device-local buffer.
         let staging = Buffer::new(
             engine.clone(),
             &BufferCreateInfo {
-                size: total_sbt_size,
+                size: total_size,
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 memory_property: vk::MemoryPropertyFlags::HOST_VISIBLE
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -476,14 +497,14 @@ impl RayTracingPipelineData {
         )?;
         unsafe {
             let ptr = staging.map()?;
-            std::ptr::copy_nonoverlapping(sbt_host.as_ptr(), ptr, total_sbt_size as usize);
+            std::ptr::copy_nonoverlapping(sbt_host.as_ptr(), ptr, total_size as usize);
             staging.unmap();
         }
 
         let sbt_buffer = Buffer::new(
             engine.clone(),
             &BufferCreateInfo {
-                size: total_sbt_size,
+                size: total_size,
                 usage: vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::TRANSFER_DST,
@@ -501,34 +522,34 @@ impl RayTracingPipelineData {
                 vk::BufferCopy {
                     src_offset: 0,
                     dst_offset: 0,
-                    size: total_sbt_size,
+                    size: total_size,
                 },
             );
         })?;
 
-        let sbt_base = sbt_buffer.get_device_address();
+        let base = sbt_buffer.get_device_address();
 
         let raygen_region = vk::StridedDeviceAddressRegionKHR {
-            device_address: sbt_base + raygen_offset,
-            stride: raygen_region_size, // For raygen, stride == size
-            size: raygen_region_size,
+            device_address: base + raygen_offset,
+            stride: raygen_size,
+            size: raygen_size,
         };
         let miss_region = vk::StridedDeviceAddressRegionKHR {
-            device_address: sbt_base + miss_offset,
+            device_address: base + miss_offset,
             stride: entry_stride,
-            size: miss_region_size,
+            size: miss_size,
         };
         let hit_region = vk::StridedDeviceAddressRegionKHR {
-            device_address: sbt_base + hit_offset,
+            device_address: base + hit_offset,
             stride: entry_stride,
-            size: hit_region_size,
+            size: hit_size,
         };
         let callable_region = vk::StridedDeviceAddressRegionKHR::default();
 
         Ok(Self {
             pipeline,
             layout,
-            _shaders: vec![shader],
+            _shaders: shaders,
             _sbt_buffer: sbt_buffer,
             raygen_region,
             miss_region,

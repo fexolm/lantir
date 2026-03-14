@@ -7,6 +7,12 @@ use vk_mem::{Alloc, Allocation, AllocationCreateInfo, MemoryUsage};
 pub trait Image {
     fn get_image(&self) -> vk::Image;
     fn get_image_view(&self) -> vk::ImageView;
+    /// Returns the image view for a specific frame slot.
+    /// For Static textures (1 image) this always returns the same view.
+    fn get_image_view_for_frame(&self, frame: usize) -> vk::ImageView {
+        let _ = frame;
+        self.get_image_view()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +41,10 @@ impl Texture {
         let data = TextureData::new(&engine, create_info)?;
         Ok(Self::make(engine, data))
     }
+
+    pub fn frame_count(&self) -> usize {
+        self.get_handle().images.len()
+    }
 }
 
 impl Image for Texture {
@@ -46,6 +56,10 @@ impl Image for Texture {
     fn get_image_view(&self) -> vk::ImageView {
         self.get_handle()
             .get_image_view(self.engine.get_current_frame_index())
+    }
+
+    fn get_image_view_for_frame(&self, frame: usize) -> vk::ImageView {
+        self.get_handle().get_image_view(frame)
     }
 }
 

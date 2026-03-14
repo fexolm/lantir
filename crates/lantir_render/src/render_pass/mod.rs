@@ -1,4 +1,4 @@
-pub mod pbr;
+pub mod geometry;
 pub mod rt;
 pub mod sky;
 

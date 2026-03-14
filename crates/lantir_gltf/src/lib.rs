@@ -194,6 +194,13 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             .map(|it| it.into_f32().collect())
             .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
+        // glTF TANGENT attribute is a vec4: xyz = tangent direction (model space), w = bitangent sign.
+        // Default to (1,0,0,1) when absent — produces an arbitrary but valid TBN.
+        let tangents: Vec<[f32; 4]> = reader
+            .read_tangents()
+            .map(|it| it.collect())
+            .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 1.0]; positions.len()]);
+
         let indices: Vec<u32> = reader
             .read_indices()
             .map(|it| it.into_u32().collect())
@@ -206,6 +213,7 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
                 normal: Vec3::from(normals[i]),
                 color: Vec4::ONE,
                 uv: Vec2::from(tex_coords[i]),
+                tangent: Vec4::from(tangents[i]),
             });
         }
 
@@ -233,6 +241,29 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
         };
 
+        let (normal_tex, normal_sampler) = if let Some(info) = material.normal_texture() {
+            let img_index = info.texture().source().index();
+            let handle = image_to_texture
+                .get(&img_index)
+                .copied()
+                .unwrap_or(INVALID_RESOURCE_HANDLE);
+            (handle, 0)
+        } else {
+            (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
+        };
+
+        let (metallic_roughness_tex, metallic_roughness_sampler) =
+            if let Some(info) = pbr.metallic_roughness_texture() {
+                let img_index = info.texture().source().index();
+                let handle = image_to_texture
+                    .get(&img_index)
+                    .copied()
+                    .unwrap_or(INVALID_RESOURCE_HANDLE);
+                (handle, 0)
+            } else {
+                (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
+            };
+
         let blend_mode = match material.alpha_mode() {
             AlphaMode::Blend => PbrBlendMode::Transparent,
             AlphaMode::Opaque => PbrBlendMode::Opaque,
@@ -250,10 +281,10 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         rm.add_material(PbrMaterial {
             albedo_tex,
             albedo_sampler,
-            normal_tex: INVALID_RESOURCE_HANDLE,
-            normal_sampler: INVALID_RESOURCE_HANDLE,
-            metallic_roughness_tex: INVALID_RESOURCE_HANDLE,
-            metallic_roughness_sampler: INVALID_RESOURCE_HANDLE,
+            normal_tex,
+            normal_sampler,
+            metallic_roughness_tex,
+            metallic_roughness_sampler,
             emissive_tex: INVALID_RESOURCE_HANDLE,
             emissive_sampler: INVALID_RESOURCE_HANDLE,
             base_color,

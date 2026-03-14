@@ -65,17 +65,18 @@ impl DescriptorSet {
             !self.engine.is_started(),
             "Cannot write to descriptor sets after rendering has started"
         );
-        let mut img_info = vk::DescriptorImageInfo::default()
-            .image_view(image_info.image.get_image_view())
-            .image_layout(image_info.layout);
 
-        if let Some(sampler) = image_info.sampler {
-            img_info = img_info.sampler(sampler.sampler);
-        }
+        for (i, &dst_set) in self.descriptor_sets.iter().enumerate() {
+            let mut img_info = vk::DescriptorImageInfo::default()
+                .image_view(image_info.image.get_image_view_for_frame(i))
+                .image_layout(image_info.layout);
 
-        let img_infos = [img_info];
+            if let Some(sampler) = image_info.sampler {
+                img_info = img_info.sampler(sampler.sampler);
+            }
 
-        for &dst_set in &self.descriptor_sets {
+            let img_infos = [img_info];
+
             let descriptor_write = vk::WriteDescriptorSet::default()
                 .dst_set(dst_set)
                 .dst_binding(image_info.binding)

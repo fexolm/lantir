@@ -4,6 +4,7 @@ struct Vertex
     float3 normal;
     float4 color;
     float2 uv;
+    float4 tangent; // xyz = tangent direction in model space, w = bitangent sign (+1 or -1)
 };
 
 struct DrawItem

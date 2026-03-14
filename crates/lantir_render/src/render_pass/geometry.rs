@@ -13,23 +13,29 @@ use crate::{
     world_renderer::WorldRenderer,
 };
 
-pub struct PbrPass {
+pub struct GeometryPass {
     blend_mode: PbrBlendMode,
     pipeline: GraphicsPipeline,
-    color_target: Arc<Texture>,
+    /// Normal attachment (RGBA16F)
+    gbuf_normal: Arc<Texture>,
+    /// Albedo attachment (RGBA8)
+    gbuf_albedo: Arc<Texture>,
+    /// Roughness/metallic attachment (RG8)
+    gbuf_roughness_metal: Arc<Texture>,
     depth_target: Arc<Texture>,
 }
 
-impl PbrPass {
+impl GeometryPass {
     pub fn new(
         engine: &Arc<RenderEngine>,
         resource_manager: &Arc<ResourceManager>,
-        color_format: vk::Format,
-        color_target: Arc<Texture>,
+        gbuf_normal: Arc<Texture>,
+        gbuf_albedo: Arc<Texture>,
+        gbuf_roughness_metal: Arc<Texture>,
         depth_target: Arc<Texture>,
         blend_mode: PbrBlendMode,
     ) -> anyhow::Result<Self> {
-        let shader = Shader::new_u32(engine.clone(), include_shader!("pbr.hlsl"))?;
+        let shader = Shader::new_u32(engine.clone(), include_shader!("gbuffer.hlsl"))?;
 
         let push_constants = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
@@ -43,18 +49,13 @@ impl PbrPass {
             &push_constants,
         )?;
 
-        // Specialization constant 0: enable alpha-test discard.
-        // 0 for Opaque/Transparent, 1 for Masked.
+        // Specialization constant 0: enable alpha-test discard for Masked pass.
         let spec_map_entries = [vk::SpecializationMapEntry {
             constant_id: 0,
             offset: 0,
             size: std::mem::size_of::<u32>(),
         }];
-        let spec_value: u32 = if blend_mode == PbrBlendMode::Masked {
-            1
-        } else {
-            0
-        };
+        let spec_value: u32 = if blend_mode == PbrBlendMode::Masked { 1 } else { 0 };
         let spec_data = spec_value.to_le_bytes();
 
         let pipeline = GraphicsPipeline::new(
@@ -72,33 +73,39 @@ impl PbrPass {
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,
                 front_face: vk::FrontFace::CLOCKWISE,
-                color_attachment_format: color_format,
-                extra_color_attachment_formats: &[],
+                // Three GBuffer color attachments:
+                //   0: normal   (RGBA16F)
+                //   1: albedo   (RGBA8)
+                //   2: roughness/metallic (RG8)
+                color_attachment_format: vk::Format::R16G16B16A16_SFLOAT,
+                extra_color_attachment_formats: &[
+                    vk::Format::R8G8B8A8_UNORM,
+                    vk::Format::R8G8_UNORM,
+                ],
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: blend_mode != PbrBlendMode::Transparent,
                 depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
-                blending_mode: match blend_mode {
-                    PbrBlendMode::Opaque | PbrBlendMode::Masked => BlendingMode::NoBlend,
-                    PbrBlendMode::Transparent => BlendingMode::AlphaBlend,
-                },
+                blending_mode: BlendingMode::NoBlend,
             },
         )?;
 
         Ok(Self {
             blend_mode,
             pipeline,
-            color_target,
+            gbuf_normal,
+            gbuf_albedo,
+            gbuf_roughness_metal,
             depth_target,
         })
     }
 }
 
-impl RenderPass for PbrPass {
+impl RenderPass for GeometryPass {
     fn name(&self) -> &'static str {
         match self.blend_mode {
-            PbrBlendMode::Opaque => "PbrPass::Opaque",
-            PbrBlendMode::Masked => "PbrPass::Masked",
-            PbrBlendMode::Transparent => "PbrPass::Transparent",
+            PbrBlendMode::Opaque => "GeometryPass::Opaque",
+            PbrBlendMode::Masked => "GeometryPass::Masked",
+            PbrBlendMode::Transparent => "GeometryPass::Transparent",
         }
     }
 
@@ -110,15 +117,49 @@ impl RenderPass for PbrPass {
     ) -> anyhow::Result<()> {
         let rm = renderer.get_resource_manager();
 
-        let color_att = RenderingAttachmentInfo {
-            image: &*self.color_target,
+        let normal_att = RenderingAttachmentInfo {
+            image: &*self.gbuf_normal,
             layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             clear_value: {
                 let mut cv = vk::ClearValue::default();
-                cv.color.float32 = [0.0, 0.0, 0.0, 1.0];
+                cv.color.float32 = [0.0, 0.0, 0.0, 0.0];
                 cv
             },
-            load_op: vk::AttachmentLoadOp::LOAD,
+            load_op: if self.blend_mode == PbrBlendMode::Opaque {
+                vk::AttachmentLoadOp::CLEAR
+            } else {
+                vk::AttachmentLoadOp::LOAD
+            },
+        };
+
+        let albedo_att = RenderingAttachmentInfo {
+            image: &*self.gbuf_albedo,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            clear_value: {
+                let mut cv = vk::ClearValue::default();
+                cv.color.float32 = [0.0, 0.0, 0.0, 0.0];
+                cv
+            },
+            load_op: if self.blend_mode == PbrBlendMode::Opaque {
+                vk::AttachmentLoadOp::CLEAR
+            } else {
+                vk::AttachmentLoadOp::LOAD
+            },
+        };
+
+        let rm_att = RenderingAttachmentInfo {
+            image: &*self.gbuf_roughness_metal,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            clear_value: {
+                let mut cv = vk::ClearValue::default();
+                cv.color.float32 = [0.5, 0.0, 0.0, 0.0];
+                cv
+            },
+            load_op: if self.blend_mode == PbrBlendMode::Opaque {
+                vk::AttachmentLoadOp::CLEAR
+            } else {
+                vk::AttachmentLoadOp::LOAD
+            },
         };
 
         let depth_att = RenderingAttachmentInfo {
@@ -132,14 +173,18 @@ impl RenderPass for PbrPass {
                 };
                 cv
             },
-            load_op: vk::AttachmentLoadOp::LOAD,
+            load_op: if self.blend_mode == PbrBlendMode::Opaque {
+                vk::AttachmentLoadOp::CLEAR
+            } else {
+                vk::AttachmentLoadOp::LOAD
+            },
         };
 
         cb.cmd_begin_rendering(
             renderer.get_engine(),
             &RenderingInfo {
                 extent: renderer.draw_extent(),
-                color_attachments: &[color_att],
+                color_attachments: &[normal_att, albedo_att, rm_att],
                 depth_attachment: Some(&depth_att),
             },
         );
@@ -148,7 +193,7 @@ impl RenderPass for PbrPass {
         cb.cmd_bind_descriptor_sets(
             renderer.get_engine(),
             &self.pipeline.layout,
-            &[renderer.get_resource_manager().get_meta_descriptor_set()],
+            &[rm.get_meta_descriptor_set()],
             vk::PipelineBindPoint::GRAPHICS,
             0,
         );
@@ -184,9 +229,7 @@ impl RenderPass for PbrPass {
                 let item = &scene.draw_items[i];
                 let world_pos = item.model_matrix * glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
                 let view_pos = scene.camera.view * world_pos;
-
-                // Back-to-front: farther objects first. In view space more negative z is farther.
-                (view_pos.z * 1000000.0) as i64
+                (view_pos.z * 1_000_000.0) as i64
             });
         }
 
@@ -201,23 +244,20 @@ impl RenderPass for PbrPass {
             });
         }
 
-        if commands.is_empty() {
-            cb.cmd_end_rendering(renderer.get_engine());
-            return Ok(());
+        if !commands.is_empty() {
+            let indirect_buffer_offset = renderer
+                .get_resource_manager()
+                .add_indirect_draw_commands(&commands)? as u64
+                * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+
+            cb.cmd_draw_indexed_indirect(
+                renderer.get_engine(),
+                &renderer.get_resource_manager().get_global_indirect_buffer(),
+                indirect_buffer_offset,
+                commands.len() as u32,
+                size_of::<vk::DrawIndexedIndirectCommand>() as u32,
+            );
         }
-
-        let indirect_buffer_offset = renderer
-            .get_resource_manager()
-            .add_indirect_draw_commands(&commands)? as u64
-            * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
-
-        cb.cmd_draw_indexed_indirect(
-            renderer.get_engine(),
-            &renderer.get_resource_manager().get_global_indirect_buffer(),
-            indirect_buffer_offset,
-            commands.len() as u32,
-            size_of::<vk::DrawIndexedIndirectCommand>() as u32,
-        );
 
         cb.cmd_end_rendering(renderer.get_engine());
         Ok(())

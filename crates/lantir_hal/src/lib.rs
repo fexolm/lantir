@@ -32,7 +32,7 @@ pub use frame::RenderFrame;
 pub use image::{Image, Sampler, SamplerInfo, Texture, TextureCreateInfo, UpdateFrequency};
 pub use pipeline::{
     BlendingMode, ComputePipeline, GraphicsPipeline, GraphicsPipelineCreateInfo, PipelineLayout,
-    RayTracingPipeline, Specialization,
+    RayTracingPipeline, RtShaderStage, RtSbtDesc, Specialization,
 };
 pub use shader::Shader;
 pub use swapchain::SwapchainImage;

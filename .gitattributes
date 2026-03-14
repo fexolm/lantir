@@ -1,0 +1,2 @@
+# Track binary GLB assets through Git LFS.
+*.glb filter=lfs diff=lfs merge=lfs -text
