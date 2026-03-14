@@ -9,10 +9,10 @@ to investigate rendering bugs without human intervention.
 
 > **MANDATORY RULE FOR CLAUDE**: Any request to implement a new rendering
 > feature (new pass, new extension, new visual effect, significant new code)
-> **MUST** be handled by invoking the `feature-pipeline` agent. Do not write
-> rendering feature code directly. The pipeline is:
-> `render-architect → implementer → rendering-reviewer → invariant-auditor →
-> visual-debug-tester → simplifier → gatekeeper`
+> **MUST** be handled by invoking the `team-lead` agent. Do not write
+> rendering feature code directly. The team is:
+> `team-lead → render-architect → implementer → quality-reviewer →
+> render-debugger`
 
 ---
 
@@ -143,21 +143,24 @@ Tools exposed: `build`, `run`, `dump_frame`, `read_frame`, `collect_logs`,
 
 ## Feature request pipeline
 
-**Any request to add a new rendering feature MUST go through the 7-agent pipeline.**
+**Any request to add a new rendering feature MUST go through the render team.**
+Canonical team manifest: `.claude/teams/render-team.yaml`
 
 Trigger phrases: "добавь", "реализуй", "implement", "add a pass", "add support for", "new render pass", "new feature", or any request that implies writing significant new rendering code.
 
 ### How to invoke
-Use the `feature-pipeline` agent via the Agent tool:
+Use the `team-lead` agent via the Agent tool:
 ```
-Agent(subagent_type="feature-pipeline", prompt="Feature: <description>. <any extra context>")
+Agent(subagent_type="team-lead", prompt="Feature: <description>. <any extra context>")
 ```
 
 The pipeline runs in this order, automatically:
 ```
-render-architect → implementer → rendering-reviewer → invariant-auditor
-       ↑ fix loop ↓                    ↑ fix loop ↓
-visual-debug-tester → simplifier → gatekeeper
+team-lead → render-architect → implementer → quality-reviewer
+                                            ↑ fix correctness / scope ↓
+                                render-debugger
+                                            ↑ fix runtime / visual ↓
+                               team-lead → final summary
 ```
 
 Never skip stages. Never write feature code directly without going through the pipeline.
@@ -166,22 +169,18 @@ Never skip stages. Never write feature code directly without going through the p
 
 | Agent | Role | Invoke when |
 |-------|------|-------------|
-| `feature-pipeline` | **Coordinator** — runs all stages | User requests a new feature |
-| `render-architect` | Plan only, no code | First stage of pipeline |
-| `implementer` | Write all Rust + HLSL code | Second stage, and fix loops |
-| `rendering-reviewer` | Review code correctness | Third stage |
-| `invariant-auditor` | Check Vulkan spec violations | Fourth stage |
-| `visual-debug-tester` | Build + run + inspect frame | Fifth stage |
-| `simplifier` | Remove unnecessary complexity | Sixth stage |
-| `gatekeeper` | Go/no-go + commit message | Final stage |
+| `team-lead` | **Team lead** — plans handoffs, enforces the workflow, returns final ship/no-ship summary | User requests a new feature |
+| `render-architect` | Plan only, no code | First stage of feature work |
+| `implementer` | Reads current source, writes Rust + HLSL, runs `cargo check`, fixes compile issues | Main implementation stage |
+| `quality-reviewer` | Combined reviewer: correctness, Vulkan invariants, and simplification opportunities | After implementation, before runtime validation |
+| `render-debugger` | Combined debugger: build/run, validation, frames, logs, regression analysis | Feature validation and bug investigation |
 
-### Debug agents (separate from feature pipeline)
+### Direct-use agents
 
 | Agent | When to invoke |
 |-------|---------------|
-| `render-bug-diagnosis` | Frame looks wrong, crash, artifact |
-| `log-analysis` | Parse runtime logs for errors / VUIDs |
-| `visual-regression` | Compare before/after frames for a code change |
+| `render-debugger` | Frame looks wrong, crash, artifact, validation error, or regression |
+| `quality-reviewer` | You want a strict code/invariant review before running the engine |
 
 ---
 
@@ -190,15 +189,12 @@ Never skip stages. Never write feature code directly without going through the p
 ```
 1. scripts/build.sh               ← compile; fix errors if any
 2. scripts/dump-frame.sh          ← render debug/frames/latest.png
-3. [visual-regression agent]      ← inspect the frame; compare to baseline
-4. scripts/collect-logs.sh 5      ← if something looks wrong, grab logs
-5. [log-analysis agent]           ← parse debug/logs/latest.log
-6. [render-bug-diagnosis agent]   ← identify root cause in source
-7. Edit the relevant source file  ← hook runs cargo check automatically
-8. scripts/build.sh               ← full rebuild
-9. scripts/dump-frame.sh          ← render new frame
-10. scripts/compare-frames.sh     ← verify the fix improved the output
-11. scripts/set-baseline.sh       ← promote to baseline when satisfied
+3. [render-debugger agent]        ← inspect frame, compare to baseline, parse logs, name likely root cause
+4. Edit the relevant source file  ← hook runs cargo check automatically
+5. scripts/build.sh               ← full rebuild
+6. scripts/dump-frame.sh          ← render new frame
+7. scripts/compare-frames.sh      ← verify the fix improved the output
+8. scripts/set-baseline.sh        ← promote to baseline when satisfied
 ```
 
 ---

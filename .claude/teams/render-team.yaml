@@ -1,0 +1,96 @@
+version: 1
+name: render-team
+description: Compact Claude team for Lantir rendering feature work and rendering bug investigation.
+entry_agent: team-lead
+
+agents:
+  - id: team-lead
+    file: .claude/agents/team-lead.md
+    role: team-lead
+    responsibilities:
+      - Own the end-to-end rendering feature workflow
+      - Delegate planning, implementation, review, and runtime validation
+      - Decide ship or no-ship based on team outputs
+
+  - id: render-architect
+    file: .claude/agents/render-architect.md
+    role: planner
+    responsibilities:
+      - Read relevant engine code before implementation
+      - Produce the smallest correct plan
+      - Preserve long-term GI architecture constraints
+
+  - id: implementer
+    file: .claude/agents/implementer.md
+    role: builder
+    responsibilities:
+      - Read current source as ground truth
+      - Implement Rust and HLSL changes
+      - Run cargo check and resolve compile issues before handoff
+
+  - id: quality-reviewer
+    file: .claude/agents/quality-reviewer.md
+    role: reviewer
+    responsibilities:
+      - Review correctness and engine integration
+      - Audit Vulkan invariants and resource lifetime rules
+      - Flag simplifications after correctness is established
+
+  - id: render-debugger
+    file: .claude/agents/render-debugger.md
+    role: validator
+    responsibilities:
+      - Build and run the renderer
+      - Inspect frames, validation output, logs, and regressions
+      - Identify likely subsystem and next fix
+
+workflows:
+  feature_request:
+    order:
+      - render-architect
+      - implementer
+      - quality-reviewer
+      - render-debugger
+    fix_loops:
+      review_failures:
+        send_back_to: implementer
+        rerun:
+          - quality-reviewer
+      runtime_failures:
+        send_back_to: implementer
+        rerun:
+          - render-debugger
+        conditional_rerun:
+          - quality-reviewer
+
+  direct_use:
+    render-debugger:
+      use_when:
+        - frame is wrong
+        - crash or validation error appears
+        - before/after render regression must be checked
+    quality-reviewer:
+      use_when:
+        - strict code and invariant review is needed before runtime testing
+
+ship_rules:
+  - Implementer must report COMPILE: PASS
+  - Quality reviewer must report PASS or only non-blocking WARN/SIMPLIFY items
+  - Render debugger must report PASS or PASS (MVP)
+  - Validation errors, crashes, black frames, white frames, and accidental grayscale regressions are no-ship conditions
+
+pruned_agents:
+  merged_into_implementer:
+    - code-reader
+    - compile-verifier
+  merged_into_quality-reviewer:
+    - rendering-reviewer
+    - invariant-auditor
+    - simplifier
+  merged_into_render-debugger:
+    - visual-debug-tester
+    - visual-regression
+    - log-analysis
+    - render-bug-diagnosis
+  removed_as_standalone:
+    - gatekeeper
