@@ -43,6 +43,7 @@ struct DynamicConstants
 {
     column_major float4x4 viewproj;
     column_major float4x4 inv_viewproj;
+    column_major float4x4 prev_viewproj;
     float4 camera_pos;
 };
 
@@ -54,6 +55,37 @@ struct Skybox
     float ambient_floor;
 };
 
+// ---------------------------------------------------------------------------
+// Octahedral normal encoding — lossless round-trip for RGBA16F GBuffer.
+// Maps unit vector ↔ float2 in [-1, 1]^2.
+// ---------------------------------------------------------------------------
+float2 oct_encode(float3 n)
+{
+    float l1 = abs(n.x) + abs(n.y) + abs(n.z);
+    n /= l1;
+    if (n.z < 0.0)
+    {
+        float ox = n.x;
+        float oy = n.y;
+        n.x = (1.0 - abs(oy)) * (ox >= 0.0 ? 1.0 : -1.0);
+        n.y = (1.0 - abs(ox)) * (oy >= 0.0 ? 1.0 : -1.0);
+    }
+    return n.xy;
+}
+
+float3 oct_decode(float2 e)
+{
+    float3 v = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (v.z < 0.0)
+    {
+        float ox = v.x;
+        v.x = (1.0 - abs(v.y)) * (ox >= 0.0 ? 1.0 : -1.0);
+        v.y = (1.0 - abs(ox)) * (v.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return normalize(v);
+}
+
+// ---------------------------------------------------------------------------
 float2 dir_to_equirect_uv(float3 dir)
 {
     dir = normalize(dir);
@@ -65,6 +97,12 @@ float2 dir_to_equirect_uv(float3 dir)
 float3 tonemap_reinhard(float3 x)
 {
     return x / (1.0 + x);
+}
+
+float3 tonemap_aces(float3 x)
+{
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
 float3 linear_to_srgb(float3 x)

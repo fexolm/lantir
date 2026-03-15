@@ -11,6 +11,7 @@ use crate::{scene::Scene, world_renderer::WorldRenderer};
 pub struct DynamicConstants {
     pub viewproj: glam::Mat4,
     pub inv_viewproj: glam::Mat4,
+    pub prev_viewproj: glam::Mat4,
     pub camera_pos: glam::Vec4,
 }
 
@@ -19,6 +20,7 @@ impl Default for DynamicConstants {
         Self {
             viewproj: glam::Mat4::IDENTITY,
             inv_viewproj: glam::Mat4::IDENTITY,
+            prev_viewproj: glam::Mat4::IDENTITY,
             camera_pos: glam::Vec4::ZERO,
         }
     }

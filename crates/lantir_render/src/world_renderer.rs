@@ -8,12 +8,7 @@ use lantir_hal::{
 };
 
 use crate::{
-    render_pass::{
-        RenderPass,
-        geometry::GeometryPass,
-        rt::RtPass,
-        sky::SkyPass,
-    },
+    render_pass::{RenderPass, geometry::GeometryPass, rt::RtPass, sky::SkyPass},
     resources::{PbrBlendMode, resource_manager::ResourceManager},
     scene::Scene,
 };
@@ -37,10 +32,15 @@ pub struct WorldRenderer {
     gbuf_albedo: Arc<Texture>,
     /// GBuffer: roughness (R) + metallic (G) (RG8)
     gbuf_roughness_metal: Arc<Texture>,
+    /// GBuffer: motion vectors (RG16F)
+    gbuf_motion: Arc<Texture>,
 
     color_format: vk::Format,
     draw_extent: vk::Extent2D,
     window_extent: vk::Extent2D,
+
+    /// View-projection matrix from the previous frame, used for motion vector generation.
+    prev_viewproj: glam::Mat4,
 
     sky_pass: SkyPass,
     geometry_opaque_pass: GeometryPass,
@@ -90,8 +90,7 @@ impl WorldRenderer {
                     height: draw_extent.height,
                     depth: 1,
                 },
-                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                    | vk::ImageUsageFlags::SAMPLED,
+                usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
                 aspect: vk::ImageAspectFlags::DEPTH,
                 mip_levels: 1,
             },
@@ -151,6 +150,24 @@ impl WorldRenderer {
             },
         )?);
 
+        // GBuffer: motion vectors (RG16F) — written by geometry pass, read by RT raygen
+        let gbuf_motion = Arc::new(Texture::new(
+            engine.clone(),
+            &TextureCreateInfo {
+                image_type: vk::ImageType::TYPE_2D,
+                update_frequency: UpdateFrequency::PerFrame,
+                format: vk::Format::R16G16_SFLOAT,
+                extent: vk::Extent3D {
+                    width: draw_extent.width,
+                    height: draw_extent.height,
+                    depth: 1,
+                },
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            },
+        )?);
+
         let sky_pass = SkyPass::new(
             &engine,
             &resource_manager,
@@ -165,6 +182,7 @@ impl WorldRenderer {
             gbuf_normal.clone(),
             gbuf_albedo.clone(),
             gbuf_roughness_metal.clone(),
+            gbuf_motion.clone(),
             depth_target.clone(),
             PbrBlendMode::Opaque,
         )?;
@@ -175,6 +193,7 @@ impl WorldRenderer {
             gbuf_normal.clone(),
             gbuf_albedo.clone(),
             gbuf_roughness_metal.clone(),
+            gbuf_motion.clone(),
             depth_target.clone(),
             PbrBlendMode::Masked,
         )?;
@@ -187,6 +206,7 @@ impl WorldRenderer {
             gbuf_normal.clone(),
             gbuf_albedo.clone(),
             gbuf_roughness_metal.clone(),
+            gbuf_motion.clone(),
             depth_target.clone(),
         )?;
 
@@ -198,9 +218,11 @@ impl WorldRenderer {
             gbuf_normal,
             gbuf_albedo,
             gbuf_roughness_metal,
+            gbuf_motion,
             color_format,
             draw_extent,
             window_extent,
+            prev_viewproj: glam::Mat4::IDENTITY,
             sky_pass,
             geometry_opaque_pass,
             geometry_masked_pass,
@@ -236,6 +258,12 @@ impl WorldRenderer {
         &self.resource_manager
     }
 
+    /// Returns the view-projection matrix from the previous frame.
+    /// Used by the geometry pass to generate motion vectors.
+    pub fn prev_viewproj(&self) -> glam::Mat4 {
+        self.prev_viewproj
+    }
+
     pub fn resize(&mut self, new_extent: vk::Extent2D) -> anyhow::Result<()> {
         self.engine.recreate_swapchain(new_extent)?;
         self.window_extent = new_extent;
@@ -260,6 +288,7 @@ impl WorldRenderer {
             &*self.gbuf_normal,
             &*self.gbuf_albedo,
             &*self.gbuf_roughness_metal,
+            &*self.gbuf_motion,
         ] {
             cb.cmd_image_barrier(
                 &self.engine,
@@ -281,9 +310,7 @@ impl WorldRenderer {
             &self.engine,
             &ImageBarrier {
                 previous_accesses: &[AccessType::DepthStencilAttachmentWrite],
-                next_accesses: &[
-                    AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer,
-                ],
+                next_accesses: &[AccessType::RayTracingShaderReadSampledImageOrUniformTexelBuffer],
                 previous_layout: vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
                 next_layout: vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL,
                 image: &*self.depth_target,
@@ -412,6 +439,7 @@ impl WorldRenderer {
             &*self.gbuf_normal,
             &*self.gbuf_albedo,
             &*self.gbuf_roughness_metal,
+            &*self.gbuf_motion,
         ] {
             cb.cmd_image_barrier(
                 &self.engine,
@@ -508,6 +536,9 @@ impl WorldRenderer {
         self.engine
             .submit_and_present(frame, &swapchain_image)
             .unwrap();
+
+        // Store this frame's viewproj as prev_viewproj for the next frame's motion vectors.
+        self.prev_viewproj = scene.camera.viewproj;
 
         Ok(())
     }

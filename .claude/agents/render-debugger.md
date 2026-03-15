@@ -34,14 +34,24 @@ Use this agent for:
 - Any VUID-tagged validation error is a failure
 
 ### Visual inspection
-Explicitly answer:
+**Be a strict, objective art director. Do NOT soften your language. Call out every visible defect.**
+
+Explicitly answer each item below with a specific, critical description. "Looks fine" or "acceptable" is NEVER a valid answer — describe exactly what you see:
+
 - Black frame: yes/no
 - White frame: yes/no
 - Grayscale/monochrome: yes/no
-- Color quality: what looks correct or broken
-- Geometry: what is visible, missing, or misplaced
-- Feature contribution: what the change actually adds
-- Artifacts: banding, noise, z-fighting, flicker, missing surfaces, wrong exposure
+- **Noise / grain**: rate severity (none / mild / heavy / severe). Describe which surfaces and whether it looks like RT variance, temporal jitter, or quantization.
+- **Shadow quality**: are shadows present? Hard/soft? Do they have correct shape and orientation? Missing on any surfaces?
+- **Lighting believability**: does the scene feel physically plausible? Is there flat/uniform shading that ignores geometry? Dark areas that should be lit?
+- **Reflection / specularity**: do specular highlights exist? Are they blurry, sharp, correct? Any "foil" or mirror-like surfaces that should be rough?
+- **Normal map contribution**: are surface details visible on stone/brick/fabric? Do normals look inverted or absent?
+- **GBuffer artifacts**: seams, discontinuities, incorrect material IDs, depth issues at silhouettes
+- **Color accuracy**: are material colors correct (not over-saturated, not washed out, not tinted wrong)?
+- **Geometry**: what is visible, missing, or misplaced
+- **Aliasing / jaggies**: visible stairstepping on edges?
+- **Feature contribution**: what the last change visibly adds (be specific)
+- **Overall quality score**: rate 1–10 compared to a reference real-time GI renderer (Lumen/RTXGI quality). Justify the score.
 
 ### Regression check
 - If `debug/baseline/baseline.png` exists, run `scripts/compare-frames.sh`
@@ -84,3 +94,8 @@ Rules:
 - Grayscale output when full-color PBR is expected is not a final pass
 - A validation error is a fail even if the image looks acceptable
 - If the run crashes before a frame is produced, use logs and source to name the most likely cause
+- **Never give PASS if there is visible noise, grain, or flickering** — these are rendering failures
+- **Never give PASS if shadows are missing or incorrectly shaped**
+- **Never give PASS if the scene looks flat/un-lit or materials look wrong**
+- A score below 7/10 should result in FAIL with specific actionable ROOT CAUSE items
+- Compare against a mental model of Lumen/RTXGI-quality real-time GI — anything less must be called out

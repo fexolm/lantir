@@ -6,10 +6,10 @@
 
 [[vk::push_constant]] ConstantBuffer<DynamicConstants> pc;
 
-[[vk::binding(0, 0)]] StructuredBuffer<Vertex>      vb;
+[[vk::binding(0, 0)]] StructuredBuffer<Vertex>       vertices;
 [[vk::binding(1, 0)]] StructuredBuffer<PbrMaterial>  materials;
 [[vk::binding(2, 0)]] Texture2D                      textures[1024];
-[[vk::binding(3, 0)]] StructuredBuffer<DrawItem>     dib;
+[[vk::binding(3, 0)]] StructuredBuffer<DrawItem>     draw_items;
 [[vk::binding(4, 0)]] SamplerState                   samplers[1024];
 
 [[vk::constant_id(0)]] const uint GBUF_ALPHA_TEST = 0u;
@@ -23,6 +23,8 @@ struct V2F
     float4 vert_color    : TEXCOORD3;
     // Tangent in world space. xyz = tangent direction, w = bitangent sign (+1 or -1).
     float4 world_tangent : TEXCOORD4;
+    float4 clip_pos_curr : TEXCOORD5;
+    float4 clip_pos_prev : TEXCOORD6;
 };
 
 struct GBufferOutput
@@ -30,17 +32,20 @@ struct GBufferOutput
     float4 normal           : SV_Target0; // world-space normal (xyz), unused (w)
     float4 albedo           : SV_Target1; // base color (rgba)
     float2 roughness_metal  : SV_Target2; // (roughness, metallic)
+    float2 motion_vector    : SV_Target3; // screen-space motion vector (NDC delta * 0.5)
 };
 
 [shader("vertex")]
 V2F vs_main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
 {
-    uint drawId = instanceId;
-    DrawItem item = dib[drawId];
-    Vertex v = vb[vertexId];
+    DrawItem item = draw_items[instanceId];
+    Vertex v = vertices[vertexId];
 
     V2F o;
-    o.position     = mul(pc.viewproj, mul(item.model_matrix, float4(v.position, 1.0)));
+    float4 world_pos4  = mul(item.model_matrix, float4(v.position, 1.0));
+    o.clip_pos_curr    = mul(pc.viewproj,      world_pos4);
+    o.clip_pos_prev    = mul(pc.prev_viewproj, world_pos4);
+    o.position         = o.clip_pos_curr;
     o.uv           = v.uv;
     o.material_id  = item.material.x;
     o.world_normal = normalize(mul((float3x3)item.normal_matrix, v.normal));
@@ -61,8 +66,10 @@ GBufferOutput ps_main(V2F input)
     float  metallic   = 0.0;
     float  alpha_cutoff = 0.0;
 
-    // Start with vertex normal; may be replaced by normal-mapped N below.
-    float3 N = normalize(input.world_normal);
+    // Vertex (geometric) normal — used for shadow ray bias in the RT pass.
+    float3 gN = normalize(input.world_normal);
+    // Shading normal — may be perturbed by normal map below.
+    float3 N = gN;
 
     if (input.material_id != INVALID)
     {
@@ -117,13 +124,22 @@ GBufferOutput ps_main(V2F input)
 
     if (GBUF_ALPHA_TEST != 0u)
     {
-        if (base_color.a < alpha_cutoff)
+        float alpha_grad = length(float2(ddx(base_color.a), ddy(base_color.a)));
+        float adjusted_cutoff = alpha_cutoff + 0.5 * alpha_grad;
+        if (base_color.a < adjusted_cutoff)
             discard;
     }
 
     GBufferOutput o;
-    o.normal          = float4(N * 0.5 + 0.5, 1.0);  // encode [-1,1] -> [0,1]
+    // Octahedral dual-normal encoding in RGBA16F:
+    //   xy = oct(shading normal)   — used for PBR shading
+    //   zw = oct(geometric/vertex normal) — used for shadow ray bias in RT pass
+    o.normal          = float4(oct_encode(N), oct_encode(gN));
     o.albedo          = base_color;
     o.roughness_metal = float2(roughness, metallic);
+    // Motion vector: NDC position delta from previous to current frame, stored as half-range.
+    float2 ndc_curr = input.clip_pos_curr.xy / input.clip_pos_curr.w;
+    float2 ndc_prev = input.clip_pos_prev.xy / input.clip_pos_prev.w;
+    o.motion_vector  = (ndc_curr - ndc_prev) * 0.5;
     return o;
 }
