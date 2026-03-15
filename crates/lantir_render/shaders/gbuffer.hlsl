@@ -23,8 +23,6 @@ struct V2F
     float4 vert_color    : TEXCOORD3;
     // Tangent in world space. xyz = tangent direction, w = bitangent sign (+1 or -1).
     float4 world_tangent : TEXCOORD4;
-    float4 clip_pos_curr : TEXCOORD5;
-    float4 clip_pos_prev : TEXCOORD6;
 };
 
 struct GBufferOutput
@@ -32,7 +30,6 @@ struct GBufferOutput
     float4 normal           : SV_Target0; // world-space normal (xyz), unused (w)
     float4 albedo           : SV_Target1; // base color (rgba)
     float2 roughness_metal  : SV_Target2; // (roughness, metallic)
-    float2 motion_vector    : SV_Target3; // screen-space motion vector (NDC delta * 0.5)
 };
 
 [shader("vertex")]
@@ -42,10 +39,7 @@ V2F vs_main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     Vertex v = vertices[vertexId];
 
     V2F o;
-    float4 world_pos4  = mul(item.model_matrix, float4(v.position, 1.0));
-    o.clip_pos_curr    = mul(pc.viewproj,      world_pos4);
-    o.clip_pos_prev    = mul(pc.prev_viewproj, world_pos4);
-    o.position         = o.clip_pos_curr;
+    o.position     = mul(pc.viewproj, mul(item.model_matrix, float4(v.position, 1.0)));
     o.uv           = v.uv;
     o.material_id  = item.material.x;
     o.world_normal = normalize(mul((float3x3)item.normal_matrix, v.normal));
@@ -96,8 +90,8 @@ GBufferOutput ps_main(V2F input)
             int texIdx  = clamp((int)mrId,      0, 1023);
             int sampIdx = clamp((int)mrSampler,  0, 1023);
             float4 mr = textures[texIdx].Sample(samplers[sampIdx], input.uv);
-            roughness = mr.g;
-            metallic  = mr.b;
+            roughness = roughness * mr.g;
+            metallic  = metallic * mr.b;
         }
 
         // Normal map — glTF tangent-space, stored as RGB (xy from [0,1]->[-1,1], z derived).
@@ -137,9 +131,5 @@ GBufferOutput ps_main(V2F input)
     o.normal          = float4(oct_encode(N), oct_encode(gN));
     o.albedo          = base_color;
     o.roughness_metal = float2(roughness, metallic);
-    // Motion vector: NDC position delta from previous to current frame, stored as half-range.
-    float2 ndc_curr = input.clip_pos_curr.xy / input.clip_pos_curr.w;
-    float2 ndc_prev = input.clip_pos_prev.xy / input.clip_pos_prev.w;
-    o.motion_vector  = (ndc_curr - ndc_prev) * 0.5;
     return o;
 }

@@ -1,5 +1,7 @@
 #![warn(clippy::all)]
 
+use std::collections::HashMap;
+
 use anyhow::Context;
 use bevy_ecs::prelude::{Commands, Entity};
 use bevy_transform::components::Transform;
@@ -23,6 +25,12 @@ pub struct GltfNode {
     pub mesh: Option<MeshHandle>,
     pub material: Option<MaterialHandle>,
     pub transform: Transform,
+}
+
+#[derive(Copy, Clone)]
+enum TextureColorSpace {
+    Srgb,
+    Linear,
 }
 
 impl GltfScene {
@@ -152,28 +160,45 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         image::load_from_memory(&bytes).context("decode embedded glTF image")
     }
 
-    fn upload_textures(
-        rm: &ResourceManager,
+    fn decode_gltf_images(
         gltf: &gltf::Gltf,
-    ) -> anyhow::Result<std::collections::HashMap<usize, TextureHandle>> {
-        let mut image_to_texture = std::collections::HashMap::new();
+    ) -> anyhow::Result<HashMap<usize, image::DynamicImage>> {
+        let mut decoded_images = HashMap::new();
         for gltf_img in gltf.images() {
             let idx = gltf_img.index();
             let decoded = decode_gltf_image(gltf, &gltf_img)
                 .with_context(|| format!("decode glTF image #{idx}"))?;
-            let handle = rm
-                .add_texture(decoded)
-                .with_context(|| format!("upload glTF image #{idx}"))?;
-            image_to_texture.insert(idx, handle);
+            decoded_images.insert(idx, decoded);
         }
-        Ok(image_to_texture)
+        Ok(decoded_images)
+    }
+
+    fn get_or_upload_texture(
+        rm: &ResourceManager,
+        decoded_images: &HashMap<usize, image::DynamicImage>,
+        image_idx: usize,
+        color_space: TextureColorSpace,
+    ) -> anyhow::Result<TextureHandle> {
+        let decoded = decoded_images
+            .get(&image_idx)
+            .cloned()
+            .with_context(|| format!("missing decoded glTF image #{image_idx}"))?;
+
+        match color_space {
+            TextureColorSpace::Srgb => rm
+                .add_texture_srgb(decoded)
+                .with_context(|| format!("upload glTF image #{image_idx} as sRGB")),
+            TextureColorSpace::Linear => rm
+                .add_texture_linear(decoded)
+                .with_context(|| format!("upload glTF image #{image_idx} as linear")),
+        }
     }
 
     fn create_primitive_mesh(
         rm: &ResourceManager,
         gltf: &gltf::Gltf,
         primitive: &gltf::Primitive,
-    ) -> anyhow::Result<MeshHandle> {
+    ) -> anyhow::Result<(MeshHandle, bool)> {
         let reader = primitive.reader(|buffer| match buffer.source() {
             gltf::buffer::Source::Bin => gltf.blob.as_deref(),
             gltf::buffer::Source::Uri(_) => None,
@@ -195,9 +220,11 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
         // glTF TANGENT attribute is a vec4: xyz = tangent direction (model space), w = bitangent sign.
-        // Default to (1,0,0,1) when absent — produces an arbitrary but valid TBN.
-        let tangents: Vec<[f32; 4]> = reader
-            .read_tangents()
+        // If tangents are missing, we still upload a placeholder tangent attribute so the vertex
+        // buffer layout stays valid, but normal mapping is disabled for this primitive's material.
+        let tangent_reader = reader.read_tangents();
+        let has_tangents = tangent_reader.is_some();
+        let tangents: Vec<[f32; 4]> = tangent_reader
             .map(|it| it.collect())
             .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 1.0]; positions.len()]);
 
@@ -217,13 +244,17 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             });
         }
 
-        rm.add_mesh(&TriMesh { vertices, indices })
-            .context("resource_manager.add_mesh")
+        let mesh = rm
+            .add_mesh(&TriMesh { vertices, indices })
+            .context("resource_manager.add_mesh")?;
+
+        Ok((mesh, has_tangents))
     }
 
     fn create_primitive_material(
         rm: &ResourceManager,
-        image_to_texture: &std::collections::HashMap<usize, TextureHandle>,
+        decoded_images: &HashMap<usize, image::DynamicImage>,
+        has_tangents: bool,
         material: &gltf::Material,
     ) -> anyhow::Result<MaterialHandle> {
         let pbr = material.pbr_metallic_roughness();
@@ -232,33 +263,44 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
 
         let (albedo_tex, albedo_sampler) = if let Some(info) = pbr.base_color_texture() {
             let img_index = info.texture().source().index();
-            let handle = image_to_texture
-                .get(&img_index)
-                .copied()
-                .unwrap_or(INVALID_RESOURCE_HANDLE);
+            let handle = get_or_upload_texture(
+                rm,
+                decoded_images,
+                img_index,
+                TextureColorSpace::Srgb,
+            )?;
             (handle, 0)
         } else {
             (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
         };
 
-        let (normal_tex, normal_sampler) = if let Some(info) = material.normal_texture() {
-            let img_index = info.texture().source().index();
-            let handle = image_to_texture
-                .get(&img_index)
-                .copied()
-                .unwrap_or(INVALID_RESOURCE_HANDLE);
-            (handle, 0)
+        let (normal_tex, normal_sampler) = if has_tangents {
+            if let Some(info) = material.normal_texture() {
+                let img_index = info.texture().source().index();
+                let handle = get_or_upload_texture(
+                    rm,
+                    decoded_images,
+                    img_index,
+                    TextureColorSpace::Linear,
+                )?;
+                (handle, 0)
+            } else {
+                (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
+            }
         } else {
+            // No tangent basis -> tangent-space normal map would decode incorrectly.
             (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
         };
 
         let (metallic_roughness_tex, metallic_roughness_sampler) =
             if let Some(info) = pbr.metallic_roughness_texture() {
                 let img_index = info.texture().source().index();
-                let handle = image_to_texture
-                    .get(&img_index)
-                    .copied()
-                    .unwrap_or(INVALID_RESOURCE_HANDLE);
+                let handle = get_or_upload_texture(
+                    rm,
+                    decoded_images,
+                    img_index,
+                    TextureColorSpace::Linear,
+                )?;
                 (handle, 0)
             } else {
                 (INVALID_RESOURCE_HANDLE, INVALID_RESOURCE_HANDLE)
@@ -301,7 +343,7 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         nodes: &mut Vec<GltfNode>,
         gltf: &gltf::Gltf,
         rm: &ResourceManager,
-        image_to_texture: &std::collections::HashMap<usize, TextureHandle>,
+        decoded_images: &HashMap<usize, image::DynamicImage>,
         node: gltf::Node,
         parent_world: Mat4,
     ) -> anyhow::Result<usize> {
@@ -321,12 +363,17 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         // If node has a mesh with primitives, represent each primitive as a child node with identity transform.
         if let Some(mesh) = node.mesh() {
             for (prim_i, primitive) in mesh.primitives().enumerate() {
-                let mesh_handle =
+                let (mesh_handle, has_tangents) =
                     create_primitive_mesh(rm, gltf, &primitive).with_context(|| {
                         format!("create mesh for node '{base_name}' primitive {prim_i}")
                     })?;
                 let mat_handle =
-                    create_primitive_material(rm, image_to_texture, &primitive.material())
+                    create_primitive_material(
+                        rm,
+                        decoded_images,
+                        has_tangents,
+                        &primitive.material(),
+                    )
                         .with_context(|| {
                             format!("create material for node '{base_name}' primitive {prim_i}")
                         })?;
@@ -349,7 +396,7 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         }
 
         for child in node.children() {
-            let child_index = add_node_recursive(nodes, gltf, rm, image_to_texture, child, world)?;
+            let child_index = add_node_recursive(nodes, gltf, rm, decoded_images, child, world)?;
             nodes[this_index].children.push(child_index);
         }
 
@@ -368,8 +415,7 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         }
     }
 
-    let image_to_texture = upload_textures(rm, &gltf)?;
-
+    let decoded_images = decode_gltf_images(&gltf)?;
     let mut nodes = Vec::new();
     for scene in gltf.scenes() {
         for node in scene.nodes() {
@@ -377,7 +423,7 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
                 &mut nodes,
                 &gltf,
                 rm,
-                &image_to_texture,
+                &decoded_images,
                 node,
                 Mat4::IDENTITY,
             )?;

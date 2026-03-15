@@ -1,14 +1,6 @@
 // rt.hlsl — Deferred lighting + shadow ray tracing pass.
 // Reads GBuffer (normal, albedo, roughness/metallic, depth) written by the geometry pass.
 // Traces 4 jittered shadow rays per pixel (soft sun) + 2-bounce diffuse GI.
-// Outputs a fully lit HDR image with temporal EMA accumulation for noise reduction.
-//
-// Noise reduction strategy:
-//   1. 4-sample shadow averaging with sun disc jitter (reduces shadow variance)
-//   2. Firefly suppression: clamp indirect to float3(3,3,3) before accumulation
-//   3. Temporal EMA: blend current frame with prev_frame history (alpha=0.1 steady-state)
-//      MVP: no motion vectors — uses simple depth-based disocclusion detection.
-//           Camera movement causes brief ghosting that reconverges in ~20 frames.
 //
 // Compiled as a single lib_6_6 SPIR-V module by build.rs.
 
@@ -24,7 +16,6 @@ struct RtPushConstants
     uint   width;
     uint   height;
     uint   frame_index; // used as RNG seed for cosine-weighted hemisphere sampling
-    float  temporal_alpha; // EMA blend weight: 0.1 = accumulate, 1.0 = no history (first frame / disocclusion)
 };
 
 [[vk::push_constant]] ConstantBuffer<RtPushConstants> pc;
@@ -51,11 +42,6 @@ struct RtPushConstants
 [[vk::binding(2, 1)]] Texture2D<float4> gbuf_albedo;          // base color RGBA
 [[vk::binding(3, 1)]] Texture2D<float2> gbuf_roughness_metal; // (roughness, metallic)
 [[vk::binding(4, 1)]] Texture2D<float>  gbuf_depth;           // reverse-Z depth (1=near, 0=far)
-// Temporal accumulation history buffer (RGBA16F, persistent across frames, stays in GENERAL layout).
-// Stores the accumulated HDR color from previous frames (linear, before tonemap).
-[[vk::binding(5, 1)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> prev_frame;
-// Motion vectors from GBuffer pass (RG16F). Used for temporal reprojection.
-[[vk::binding(6, 1)]] Texture2D<float2> gbuf_motion;
 
 // ---------------------------------------------------------------------------
 // GGX / Cook-Torrance BRDF + IBL helpers
@@ -356,11 +342,6 @@ void raygen_main()
             sky_hdr = lerp(float3(0.3, 0.3, 0.35), float3(0.15, 0.35, 0.8), t);
         }
 
-        // Sky pixels: no temporal accumulation needed (sky is noise-free).
-        // Write HDR to history buffer so geometry pixels that transition from/to sky
-        // get a valid history value next frame.
-        prev_frame[pixel] = float4(sky_hdr, 1.0);
-        // Tonemap + gamma at the very end, same as geometry pixels
         color_out[pixel] = float4(linear_to_srgb(tonemap_aces(sky_hdr)), 1.0);
         return;
     }
@@ -554,40 +535,8 @@ void raygen_main()
     // -----------------------------------------------------------------------
     indirect = min(indirect, float3(3.0, 3.0, 3.0));
 
-    // -----------------------------------------------------------------------
-    // Compose current frame (linear HDR). Not tonemapped yet — temporal blend
-    // must happen in linear HDR space to avoid color shifts.
-    // -----------------------------------------------------------------------
-    float3 current_hdr = ambient + direct + indirect;
-
-    // -----------------------------------------------------------------------
-    // Temporal EMA accumulation with motion-vector reprojection and AABB clamping.
-    // Motion vector reprojection: sample history at the reprojected pixel position
-    // to reduce ghosting on camera/object movement.
-    // AABB clamping: clamp history to [current * 0.1, current * 10.0] to bound
-    // ghosting from disocclusion while allowing gradual light/shadow changes.
-    // -----------------------------------------------------------------------
-    float2 mv = gbuf_motion.Load(int3(pixel, 0));
-    float2 prev_uv = uv - mv;
-    bool valid_history = all(prev_uv >= 0.0) && all(prev_uv <= 1.0);
-    uint2 prev_pixel = uint2(saturate(prev_uv) * float2(pc.width, pc.height));
-    float3 prev_hdr = valid_history ? prev_frame[prev_pixel].rgb : current_hdr;
-
-    // Luminance-scale AABB clamp: prevent ghosting while allowing gradual changes.
-    prev_hdr = clamp(prev_hdr,
-                     current_hdr * 0.1,
-                     current_hdr * 10.0);
-
-    float3 accum_hdr = lerp(prev_hdr, current_hdr, pc.temporal_alpha);
-
-    // Write accumulated HDR back to history buffer (linear, no tonemap).
-    prev_frame[pixel] = float4(accum_hdr, 1.0);
-
-    // -----------------------------------------------------------------------
-    // Tonemap + gamma on the accumulated result → write to display output.
-    // -----------------------------------------------------------------------
-    float3 final_color = linear_to_srgb(tonemap_aces(accum_hdr));
-    color_out[pixel] = float4(final_color, 1.0);
+    float3 final_hdr = ambient + direct + indirect;
+    color_out[pixel] = float4(linear_to_srgb(tonemap_aces(final_hdr)), 1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -722,8 +671,8 @@ void bounce_hit_main(inout BouncePayload payload, BuiltInTriangleIntersectionAtt
         textures[ti].GetDimensions(rm_dims.x, rm_dims.y);
         float rm_lod = log2(max(cone_width * max(rm_dims.x, rm_dims.y), 1.0));
         float2 rm = textures[ti].SampleLevel(samplers[si], uv, rm_lod).gb; // glTF: G=roughness, B=metallic
-        hit_roughness = max(rm.x, 0.04);
-        hit_metallic  = rm.y;
+        hit_roughness = mat.roughness * rm.x;
+        hit_metallic  = mat.metallness * rm.y;
     }
 
     payload.hit        = true;

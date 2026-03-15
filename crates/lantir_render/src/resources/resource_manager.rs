@@ -381,7 +381,11 @@ impl ResourceManager {
         })
     }
 
-    pub fn add_texture(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
+    fn add_ldr_texture(
+        &self,
+        image: image::DynamicImage,
+        format: vk::Format,
+    ) -> anyhow::Result<TextureHandle> {
         let mut textures = self.textures.lock();
 
         if textures.len() >= MAX_TEXTURES {
@@ -394,7 +398,7 @@ impl ResourceManager {
             &rgba8,
             rgba8.width(),
             rgba8.height(),
-            vk::Format::R8G8B8A8_UNORM,
+            format,
         )?;
 
         let handle = textures.len() as TextureHandle;
@@ -410,6 +414,18 @@ impl ResourceManager {
                 array_index: handle,
             });
         Ok(handle)
+    }
+
+    pub fn add_texture(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
+        self.add_texture_linear(image)
+    }
+
+    pub fn add_texture_linear(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
+        self.add_ldr_texture(image, vk::Format::R8G8B8A8_UNORM)
+    }
+
+    pub fn add_texture_srgb(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {
+        self.add_ldr_texture(image, vk::Format::R8G8B8A8_SRGB)
     }
 
     pub fn add_hdr_texture(&self, image: image::DynamicImage) -> anyhow::Result<TextureHandle> {

@@ -43,7 +43,6 @@ struct DynamicConstants
 {
     column_major float4x4 viewproj;
     column_major float4x4 inv_viewproj;
-    column_major float4x4 prev_viewproj;
     float4 camera_pos;
 };
 

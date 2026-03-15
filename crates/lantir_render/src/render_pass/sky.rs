@@ -118,7 +118,6 @@ impl RenderPass for SkyPass {
         let push = DynamicConstants {
             viewproj: scene.camera.viewproj,
             inv_viewproj: scene.camera.inv_viewproj,
-            prev_viewproj: renderer.prev_viewproj(),
             camera_pos: scene.camera.camera_pos,
         };
 
