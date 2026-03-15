@@ -194,6 +194,42 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
         }
     }
 
+    fn generate_vertex_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
+        let mut normals = vec![Vec3::ZERO; positions.len()];
+
+        for tri in indices.chunks_exact(3) {
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+            if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+                continue;
+            }
+
+            let p0 = Vec3::from(positions[i0]);
+            let p1 = Vec3::from(positions[i1]);
+            let p2 = Vec3::from(positions[i2]);
+            let face = (p1 - p0).cross(p2 - p0);
+            if face.length_squared() <= 1e-20 {
+                continue;
+            }
+
+            normals[i0] += face;
+            normals[i1] += face;
+            normals[i2] += face;
+        }
+
+        normals
+            .into_iter()
+            .map(|n| {
+                if n.length_squared() > 1e-20 {
+                    n.normalize().to_array()
+                } else {
+                    Vec3::Y.to_array()
+                }
+            })
+            .collect()
+    }
+
     fn create_primitive_mesh(
         rm: &ResourceManager,
         gltf: &gltf::Gltf,
@@ -209,15 +245,25 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             .context("primitive has no positions")?
             .collect::<Vec<[f32; 3]>>();
 
+        let indices: Vec<u32> = reader
+            .read_indices()
+            .map(|it| it.into_u32().collect())
+            .unwrap_or_else(|| (0..positions.len() as u32).collect());
+
         let normals: Vec<[f32; 3]> = reader
             .read_normals()
             .map(|it| it.collect())
-            .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+            .unwrap_or_else(|| generate_vertex_normals(&positions, &indices));
 
         let tex_coords: Vec<[f32; 2]> = reader
             .read_tex_coords(0)
             .map(|it| it.into_f32().collect())
             .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+
+        let colors: Vec<[f32; 4]> = reader
+            .read_colors(0)
+            .map(|it| it.into_rgba_f32().collect())
+            .unwrap_or_else(|| vec![[1.0, 1.0, 1.0, 1.0]; positions.len()]);
 
         // glTF TANGENT attribute is a vec4: xyz = tangent direction (model space), w = bitangent sign.
         // If tangents are missing, we still upload a placeholder tangent attribute so the vertex
@@ -228,17 +274,12 @@ pub fn load_gltf(world_renderer: &WorldRenderer, gltf_bytes: &[u8]) -> anyhow::R
             .map(|it| it.collect())
             .unwrap_or_else(|| vec![[1.0, 0.0, 0.0, 1.0]; positions.len()]);
 
-        let indices: Vec<u32> = reader
-            .read_indices()
-            .map(|it| it.into_u32().collect())
-            .unwrap_or_else(|| (0..positions.len() as u32).collect());
-
         let mut vertices = Vec::with_capacity(positions.len());
         for i in 0..positions.len() {
             vertices.push(Vertex {
                 position: Vec3::from(positions[i]),
                 normal: Vec3::from(normals[i]),
-                color: Vec4::ONE,
+                color: Vec4::from(colors[i]),
                 uv: Vec2::from(tex_coords[i]),
                 tangent: Vec4::from(tangents[i]),
             });
