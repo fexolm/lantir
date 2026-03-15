@@ -4,15 +4,12 @@ use anyhow::Context;
 
 use lantir_hal::{
     AccessType, CommandBuffer, CopyImageInfo, DescriptorSet, DescriptorSetBinding,
-    DescriptorSetLayout, ImageBarrier, PipelineLayout, RayTracingPipeline, RenderEngine,
-    RtSbtDesc, RtShaderStage, Shader, Texture, TextureCreateInfo, UpdateFrequency,
-    WriteImageInfo, vk,
+    DescriptorSetLayout, ImageBarrier, PipelineLayout, RayTracingPipeline, RenderEngine, RtSbtDesc,
+    RtShaderStage, Shader, Texture, TextureCreateInfo, UpdateFrequency, WriteImageInfo, vk,
 };
 
 use crate::{
-    include_shader,
-    resources::resource_manager::ResourceManager,
-    scene::Scene,
+    include_shader, resources::resource_manager::ResourceManager, scene::Scene,
     world_renderer::WorldRenderer,
 };
 
@@ -41,15 +38,6 @@ pub struct RtPass {
     rt_output: Texture,
     draw_extent: vk::Extent2D,
     color_target: Arc<Texture>,
-    /// Held to extend lifetime; actual image handle is baked into the descriptor set.
-    #[allow(dead_code)]
-    gbuf_normal: Arc<Texture>,
-    #[allow(dead_code)]
-    gbuf_albedo: Arc<Texture>,
-    #[allow(dead_code)]
-    gbuf_roughness_metal: Arc<Texture>,
-    #[allow(dead_code)]
-    depth_target: Arc<Texture>,
 }
 
 impl RtPass {
@@ -63,8 +51,8 @@ impl RtPass {
         gbuf_roughness_metal: Arc<Texture>,
         depth_target: Arc<Texture>,
     ) -> anyhow::Result<Self> {
-        let shader = Shader::new_u32(engine.clone(), include_shader!("rt.hlsl"))
-            .context("rt shader")?;
+        let shader =
+            Shader::new_u32(engine.clone(), include_shader!("rt.hlsl")).context("rt shader")?;
 
         // set=1 layout:
         //   binding 0: STORAGE_IMAGE    (rt_output, written by raygen)
@@ -228,12 +216,11 @@ impl RtPass {
         )
         .context("RT pipeline")?;
 
-        // RT output storage image
         let rt_output = Texture::new(
             engine.clone(),
             &TextureCreateInfo {
                 image_type: vk::ImageType::TYPE_2D,
-                update_frequency: UpdateFrequency::Static,
+                update_frequency: UpdateFrequency::PerFrame,
                 format: vk::Format::B8G8R8A8_UNORM,
                 extent: vk::Extent3D {
                     width: draw_extent.width,
@@ -250,59 +237,6 @@ impl RtPass {
         let descriptor_set =
             DescriptorSet::new(engine.clone(), rt_ds_layout).context("RT DS alloc")?;
 
-        // Transition all descriptor images to their expected layouts before writing descriptors.
-        // The Vulkan validation layer (VUID-09600) checks that images are in the layout
-        // recorded in VkDescriptorImageInfo at the time the descriptor is written. By
-        // transitioning up-front we ensure a consistent baseline layout from frame one.
-        engine.immediate_submit(|cb| {
-            // rt_output: UNDEFINED → GENERAL (storage image, stays GENERAL throughout)
-            cb.cmd_image_barrier(
-                engine,
-                &ImageBarrier {
-                    previous_accesses: &[AccessType::Nothing],
-                    next_accesses: &[AccessType::AnyShaderWrite],
-                    previous_layout: vk::ImageLayout::UNDEFINED,
-                    next_layout: vk::ImageLayout::GENERAL,
-                    image: &rt_output,
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                },
-            );
-            // GBuffer color images: UNDEFINED → SHADER_READ_ONLY_OPTIMAL
-            // world_renderer will transition them UNDEFINED→COLOR_ATTACHMENT_OPTIMAL at the
-            // start of each frame (discarding content), then COLOR_ATTACHMENT_OPTIMAL→
-            // SHADER_READ_ONLY_OPTIMAL before the RT pass. This initial transition just
-            // sets the validation-layer-tracked baseline layout to match the descriptor.
-            for tex in [
-                &*gbuf_normal,
-                &*gbuf_albedo,
-                &*gbuf_roughness_metal,
-            ] {
-                cb.cmd_image_barrier(
-                    engine,
-                    &ImageBarrier {
-                        previous_accesses: &[AccessType::Nothing],
-                        next_accesses: &[AccessType::Nothing],
-                        previous_layout: vk::ImageLayout::UNDEFINED,
-                        next_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        image: tex,
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                    },
-                );
-            }
-            // Depth: UNDEFINED → DEPTH_READ_ONLY_OPTIMAL
-            cb.cmd_image_barrier(
-                engine,
-                &ImageBarrier {
-                    previous_accesses: &[AccessType::Nothing],
-                    next_accesses: &[AccessType::Nothing],
-                    previous_layout: vk::ImageLayout::UNDEFINED,
-                    next_layout: vk::ImageLayout::DEPTH_READ_ONLY_OPTIMAL,
-                    image: &*depth_target,
-                    aspect_mask: vk::ImageAspectFlags::DEPTH,
-                },
-            );
-        })?;
-
         descriptor_set.write_image(&WriteImageInfo {
             binding: 0,
             image: &rt_output,
@@ -311,8 +245,6 @@ impl RtPass {
             sampler: None,
             array_index: 0,
         });
-        // GBuffer color images: descriptor layout matches SHADER_READ_ONLY_OPTIMAL transition above.
-        // world_renderer transitions them to this layout before each RT pass execution.
         descriptor_set.write_image(&WriteImageInfo {
             binding: 1,
             image: &*gbuf_normal,
@@ -337,8 +269,6 @@ impl RtPass {
             sampler: None,
             array_index: 0,
         });
-        // Depth image: descriptor layout matches DEPTH_READ_ONLY_OPTIMAL transition above.
-        // world_renderer transitions it to this layout before each RT pass execution.
         descriptor_set.write_image(&WriteImageInfo {
             binding: 4,
             image: &*depth_target,
@@ -354,10 +284,6 @@ impl RtPass {
             rt_output,
             draw_extent,
             color_target,
-            gbuf_normal,
-            gbuf_albedo,
-            gbuf_roughness_metal,
-            depth_target,
         })
     }
 
@@ -370,17 +296,12 @@ impl RtPass {
         let engine = renderer.get_engine();
         let resource_manager = renderer.get_resource_manager();
 
-        // GBuffer and depth images are already in SHADER_READ_ONLY_OPTIMAL /
-        // DEPTH_READ_ONLY_OPTIMAL at this point — the barriers were emitted by
-        // world_renderer::run_passes before calling rt_pass.execute().
-
-        // WAW barrier for rt_output (previous frame → this frame)
         cb.cmd_image_barrier(
             engine,
             &ImageBarrier {
-                previous_accesses: &[AccessType::AnyShaderWrite],
+                previous_accesses: &[AccessType::Nothing],
                 next_accesses: &[AccessType::AnyShaderWrite],
-                previous_layout: vk::ImageLayout::GENERAL,
+                previous_layout: vk::ImageLayout::UNDEFINED,
                 next_layout: vk::ImageLayout::GENERAL,
                 image: &self.rt_output,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -424,11 +345,6 @@ impl RtPass {
             self.draw_extent.height,
         );
 
-        // GBuffer textures (SHADER_READ_ONLY_OPTIMAL) and depth (DEPTH_READ_ONLY_OPTIMAL) are
-        // left in their read-only layouts after the RT pass. world_renderer will re-initialize
-        // them from UNDEFINED next frame (discarding content), so no transition is needed here.
-
-        // rt_output GENERAL → TRANSFER_SRC → blit to color_target → restore
         cb.cmd_image_barrier(
             engine,
             &ImageBarrier {
@@ -472,17 +388,6 @@ impl RtPass {
                 previous_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 next_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 image: &*self.color_target,
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-            },
-        );
-        cb.cmd_image_barrier(
-            engine,
-            &ImageBarrier {
-                previous_accesses: &[AccessType::TransferRead],
-                next_accesses: &[AccessType::AnyShaderWrite],
-                previous_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                next_layout: vk::ImageLayout::GENERAL,
-                image: &self.rt_output,
                 aspect_mask: vk::ImageAspectFlags::COLOR,
             },
         );

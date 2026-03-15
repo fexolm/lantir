@@ -23,15 +23,13 @@ struct RtPushConstants
 // ---------------------------------------------------------------------------
 // Meta bindings (set=0) — indices match META_BUFFER_BINDING_* in resources/mod.rs
 // ---------------------------------------------------------------------------
-[[vk::binding(0, 0)]] StructuredBuffer<Vertex>      vb;
+[[vk::binding(0, 0)]] StructuredBuffer<Vertex>       vertices;
 [[vk::binding(1, 0)]] StructuredBuffer<PbrMaterial>  materials;
 [[vk::binding(2, 0)]] Texture2D                      textures[1024];
-[[vk::binding(3, 0)]] StructuredBuffer<DrawItem>     dib;
+[[vk::binding(3, 0)]] StructuredBuffer<DrawItem>     draw_items;
 [[vk::binding(4, 0)]] SamplerState                   samplers[1024];
 [[vk::binding(5, 0)]] ConstantBuffer<Skybox>         skybox;
-[[vk::binding(6, 0)]] StructuredBuffer<uint>         ib;
-
-// TLAS — for shadow ray tracing
+[[vk::binding(6, 0)]] StructuredBuffer<uint>         indices;
 [[vk::binding(7, 0)]] RaytracingAccelerationStructure tlas;
 
 // ---------------------------------------------------------------------------
@@ -603,20 +601,20 @@ void bounce_hit_main(inout BouncePayload payload, BuiltInTriangleIntersectionAtt
     uint prim_id     = PrimitiveIndex();
 
     // Look up the DrawItem for this instance
-    DrawItem di = dib[instance_id];
+    DrawItem di = draw_items[instance_id];
 
     uint vertex_offset = di.mesh_offsets.x;
     uint index_offset  = di.mesh_offsets.y;
 
     // Fetch triangle indices
-    uint i0 = ib[index_offset + prim_id * 3 + 0];
-    uint i1 = ib[index_offset + prim_id * 3 + 1];
-    uint i2 = ib[index_offset + prim_id * 3 + 2];
+    uint i0 = indices[index_offset + prim_id * 3 + 0];
+    uint i1 = indices[index_offset + prim_id * 3 + 1];
+    uint i2 = indices[index_offset + prim_id * 3 + 2];
 
     // Fetch vertices
-    Vertex v0 = vb[vertex_offset + i0];
-    Vertex v1 = vb[vertex_offset + i1];
-    Vertex v2 = vb[vertex_offset + i2];
+    Vertex v0 = vertices[vertex_offset + i0];
+    Vertex v1 = vertices[vertex_offset + i1];
+    Vertex v2 = vertices[vertex_offset + i2];
 
     // Barycentric interpolation
     float2 bary  = attr.barycentrics;
