@@ -1,5 +1,5 @@
 // gbuffer.hlsl — GBuffer geometry pass.
-// Outputs: normal (RGBA16F), albedo (RGBA8), roughness+metallic (RG8).
+// Outputs: normal+material (RGBA16F), albedo (RGBA8).
 // Depth is written via standard depth test.
 
 #include "common.hlsli"
@@ -21,16 +21,13 @@ struct V2F
     nointerpolation uint material_id : TEXCOORD1;
     float3 world_normal  : TEXCOORD2;
     float4 vert_color    : TEXCOORD3;
-    float3 world_pos     : TEXCOORD4;
-    // Tangent in world space. xyz = tangent direction, w = bitangent sign (+1 or -1).
-    float4 world_tangent : TEXCOORD5;
+    float4 world_tangent : TEXCOORD4;
 };
 
 struct GBufferOutput
 {
-    float4 normal           : SV_Target0; // oct(shading normal), oct(geometric normal)
+    float4 normal           : SV_Target0; // xy = oct(shading normal), zw = roughness/metallic
     float4 albedo           : SV_Target1; // base color (rgba)
-    float2 roughness_metal  : SV_Target2; // (roughness, metallic)
 };
 
 [shader("vertex")]
@@ -45,7 +42,6 @@ V2F vs_main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     o.uv           = v.uv;
     o.material_id  = item.material.x;
     o.world_normal = normalize(mul((float3x3)item.normal_matrix, v.normal));
-    o.world_pos    = world_pos.xyz;
     o.vert_color   = v.color;
     // Tangents are directions in the surface plane, so transform them by the
     // model matrix, not the inverse-transpose normal matrix.
@@ -65,16 +61,6 @@ GBufferOutput ps_main(V2F input)
     float  alpha_cutoff = 0.0;
 
     float3 interp_N = normalize(input.world_normal);
-    // True geometric normal from the world-space surface derivatives. This is
-    // stable per triangle and is the right normal to use for RT biasing.
-    float3 dpdx = ddx(input.world_pos);
-    float3 dpdy = ddy(input.world_pos);
-    float3 face_N = cross(dpdx, dpdy);
-    float face_len2 = dot(face_N, face_N);
-    float3 gN = face_len2 > 1e-12 ? normalize(face_N) : interp_N;
-    if (dot(gN, interp_N) < 0.0)
-        gN = -gN;
-
     // Shading normal — may be perturbed by normal map below.
     float3 N = interp_N;
 
@@ -141,11 +127,7 @@ GBufferOutput ps_main(V2F input)
     }
 
     GBufferOutput o;
-    // Octahedral dual-normal encoding in RGBA16F:
-    //   xy = oct(shading normal)   — used for PBR shading
-    //   zw = oct(geometric/face normal) — used for shadow ray bias in RT pass
-    o.normal          = float4(oct_encode(N), oct_encode(gN));
-    o.albedo          = base_color;
-    o.roughness_metal = float2(roughness, metallic);
+    o.normal = float4(oct_encode(N), roughness, metallic);
+    o.albedo = base_color;
     return o;
 }

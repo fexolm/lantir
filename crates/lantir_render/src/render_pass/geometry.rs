@@ -16,12 +16,10 @@ use crate::{
 pub struct GeometryPass {
     blend_mode: PbrBlendMode,
     pipeline: GraphicsPipeline,
-    /// Normal attachment (RGBA16F)
+    /// Normal/material attachment (RGBA16F): normal.xy, roughness/metallic.zw
     gbuf_normal: Arc<Texture>,
     /// Albedo attachment (RGBA8)
     gbuf_albedo: Arc<Texture>,
-    /// Roughness/metallic attachment (RG8)
-    gbuf_roughness_metal: Arc<Texture>,
     depth_target: Arc<Texture>,
 }
 
@@ -31,7 +29,6 @@ impl GeometryPass {
         resource_manager: &Arc<ResourceManager>,
         gbuf_normal: Arc<Texture>,
         gbuf_albedo: Arc<Texture>,
-        gbuf_roughness_metal: Arc<Texture>,
         depth_target: Arc<Texture>,
         blend_mode: PbrBlendMode,
     ) -> anyhow::Result<Self> {
@@ -73,15 +70,11 @@ impl GeometryPass {
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,
                 front_face: vk::FrontFace::CLOCKWISE,
-                // Three GBuffer color attachments:
-                //   0: normal   (RGBA16F)
-                //   1: albedo   (RGBA8)
-                //   2: roughness/metallic (RG8)
+                // Two GBuffer color attachments:
+                //   0: normal/material (RGBA16F)
+                //   1: albedo          (RGBA8)
                 color_attachment_format: vk::Format::R16G16B16A16_SFLOAT,
-                extra_color_attachment_formats: &[
-                    vk::Format::R8G8B8A8_UNORM,
-                    vk::Format::R8G8_UNORM,
-                ],
+                extra_color_attachment_formats: &[vk::Format::R8G8B8A8_UNORM],
                 depth_format: vk::Format::D32_SFLOAT,
                 enable_depth_write: blend_mode != PbrBlendMode::Transparent,
                 depth_compare_op: vk::CompareOp::GREATER_OR_EQUAL,
@@ -94,7 +87,6 @@ impl GeometryPass {
             pipeline,
             gbuf_normal,
             gbuf_albedo,
-            gbuf_roughness_metal,
             depth_target,
         })
     }
@@ -147,21 +139,6 @@ impl RenderPass for GeometryPass {
             },
         };
 
-        let rm_att = RenderingAttachmentInfo {
-            image: &*self.gbuf_roughness_metal,
-            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            clear_value: {
-                let mut cv = vk::ClearValue::default();
-                cv.color.float32 = [0.5, 0.0, 0.0, 0.0];
-                cv
-            },
-            load_op: if self.blend_mode == PbrBlendMode::Opaque {
-                vk::AttachmentLoadOp::CLEAR
-            } else {
-                vk::AttachmentLoadOp::LOAD
-            },
-        };
-
         let depth_att = RenderingAttachmentInfo {
             image: &*self.depth_target,
             layout: vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
@@ -184,7 +161,7 @@ impl RenderPass for GeometryPass {
             renderer.get_engine(),
             &RenderingInfo {
                 extent: renderer.draw_extent(),
-                color_attachments: &[normal_att, albedo_att, rm_att],
+                color_attachments: &[normal_att, albedo_att],
                 depth_attachment: Some(&depth_att),
             },
         );

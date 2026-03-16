@@ -26,12 +26,10 @@ pub struct WorldRenderer {
     color_target: Arc<Texture>,
     depth_target: Arc<Texture>,
 
-    /// GBuffer: world-space normals (RGBA16F)
+    /// GBuffer: world-space normals (xy) + roughness/metallic (zw) in RGBA16F
     gbuf_normal: Arc<Texture>,
     /// GBuffer: albedo (RGBA8)
     gbuf_albedo: Arc<Texture>,
-    /// GBuffer: roughness (R) + metallic (G) (RG8)
-    gbuf_roughness_metal: Arc<Texture>,
 
     color_format: vk::Format,
     draw_extent: vk::Extent2D,
@@ -91,7 +89,7 @@ impl WorldRenderer {
             },
         )?);
 
-        // GBuffer: normal (RGBA16F) — written by geometry pass, read by RT raygen
+        // GBuffer: normal/material (RGBA16F) — normal.xy + roughness/metallic.zw
         let gbuf_normal = Arc::new(Texture::new(
             engine.clone(),
             &TextureCreateInfo {
@@ -127,24 +125,6 @@ impl WorldRenderer {
             },
         )?);
 
-        // GBuffer: roughness/metallic (RG8)
-        let gbuf_roughness_metal = Arc::new(Texture::new(
-            engine.clone(),
-            &TextureCreateInfo {
-                image_type: vk::ImageType::TYPE_2D,
-                update_frequency: UpdateFrequency::PerFrame,
-                format: vk::Format::R8G8_UNORM,
-                extent: vk::Extent3D {
-                    width: draw_extent.width,
-                    height: draw_extent.height,
-                    depth: 1,
-                },
-                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
-                aspect: vk::ImageAspectFlags::COLOR,
-                mip_levels: 1,
-            },
-        )?);
-
         let sky_pass = SkyPass::new(
             &engine,
             &resource_manager,
@@ -158,7 +138,6 @@ impl WorldRenderer {
             &resource_manager,
             gbuf_normal.clone(),
             gbuf_albedo.clone(),
-            gbuf_roughness_metal.clone(),
             depth_target.clone(),
             PbrBlendMode::Opaque,
         )?;
@@ -168,7 +147,6 @@ impl WorldRenderer {
             &resource_manager,
             gbuf_normal.clone(),
             gbuf_albedo.clone(),
-            gbuf_roughness_metal.clone(),
             depth_target.clone(),
             PbrBlendMode::Masked,
         )?;
@@ -180,7 +158,7 @@ impl WorldRenderer {
             color_target.clone(),
             gbuf_normal.clone(),
             gbuf_albedo.clone(),
-            gbuf_roughness_metal.clone(),
+            gbuf_normal.clone(),
             depth_target.clone(),
         )?;
 
@@ -191,7 +169,6 @@ impl WorldRenderer {
             depth_target,
             gbuf_normal,
             gbuf_albedo,
-            gbuf_roughness_metal,
             color_format,
             draw_extent,
             window_extent,
@@ -253,7 +230,6 @@ impl WorldRenderer {
         for tex in [
             &*self.gbuf_normal,
             &*self.gbuf_albedo,
-            &*self.gbuf_roughness_metal,
         ] {
             cb.cmd_image_barrier(
                 &self.engine,
@@ -403,7 +379,6 @@ impl WorldRenderer {
         for tex in [
             &*self.gbuf_normal,
             &*self.gbuf_albedo,
-            &*self.gbuf_roughness_metal,
         ] {
             cb.cmd_image_barrier(
                 &self.engine,
