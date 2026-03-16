@@ -2,6 +2,7 @@
 // Compatible with the current rt.rs pipeline and keeps the required entry points.
 
 #include "common.hlsli"
+#include "brdf.hlsli"
 
 struct RtPushConstants
 {
@@ -35,7 +36,6 @@ struct RtPushConstants
 [[vk::binding(4, 1)]] Texture2D<float>  gbuf_depth;
 
 static const uint  INVALID = 0xFFFFFFFFu;
-static const float PI = 3.14159265359;
 static const uint  RAY_MASK_ALL = 0xFFu;
 
 // SBT selection constants. These must match the group layout in rt.rs:
@@ -115,15 +115,43 @@ float trace_shadow_from_origin(float3 ray_origin, float3 sun_dir)
     return payload.visibility;
 }
 
-float3 shade_surface_simple_from_origin(float3 albedo, float3 N, float3 shadow_origin)
+float3 shade_surface_from_origin(float3 albedo, float3 N, float3 view_dir, float roughness, float metallic, float3 shadow_origin)
 {
     float3 sun_dir = get_sun_dir();
-    float3 sun_color = get_sun_color();
+
+    float3 H = normalize(sun_dir + view_dir);
+    float NdotH = saturate(dot(N, H));
+    float NdotV = saturate(dot(N, view_dir));
+    float NdotL = saturate(dot(N, sun_dir));
+    float VdotH = saturate(dot(view_dir, H));
+
+    // Fresnel reflectance at normal incidence (how much light is reflected vs refracted) 
+    float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
+
+    // Fresnel term using Schlick's approximation. Provides a smooth interpolation between F0 at grazing angles and near-zero reflectance at normal incidence.
+    float3 F  = fresnel_schlick(VdotH, F0);
+
+    // Normal distribution function (NDF) using GGX/Trowbridge-Reitz. Models the microfacet orientation distribution, controlling the sharpness of specular highlights.
+    float3 D = distribution_ggx(NdotH, roughness);
+
+    // Geometry function using Schlick-GGX. Models shadowing and masking of microfacets, affecting the visibility of specular reflections.
+    float  G  = geometry_smith(NdotV, NdotL, roughness);
+
+    // Cook-Torrance microfacet BRDF combining the above terms. Represents the specular reflection component of the surface response.
+    float3 specular = (D * F * G) / max(4.0 * NdotV * NdotL, 1e-6);
+
+    float3 kD = (1.0 - F) * (1.0 - metallic); // Diffuse reflection component, reduced by Fresnel reflectance and metallic factor.
+
+    float3 diffuse = kD * albedo / PI; // Lambertian diffuse term, normalized by PI.
 
     float shadow = trace_shadow_from_origin(shadow_origin, sun_dir);
-    float NdotL = saturate(dot(N, sun_dir));
-    float3 direct  = albedo * (NdotL / PI) * sun_color * shadow;
-    float3 ambient = albedo * 0.03;
+
+    float3 radiance = get_sun_color();
+
+    // Final outgoing radiance is the sum of diffuse and specular contributions, modulated by the incoming radiance, angle of incidence (NdotL), and shadow visibility.
+    float3 direct = (diffuse + specular) * radiance * NdotL * shadow;
+
+    float3 ambient = albedo * 0.03; // Simple ambient term to ensure non-zero base lighting.
     return ambient + direct;
 }
 
@@ -149,12 +177,15 @@ void raygen_main()
         return;
     }
 
-    float3 N       = oct_decode(gbuf_n.xy);
+    float3 normals       = oct_decode(gbuf_n.xy);
+    float roughness  = gbuf_n.z;
+    float metallic   = gbuf_n.w;
     float3 albedo  = gbuf_a.rgb;
-    float3 P = reconstruct_world_pos_from_uv(uv, depth);
-    float3 shadow_origin = add_bias(P + N * RAYGEN_NORMAL_OFFSET, N);
+    float3 world_pos = reconstruct_world_pos_from_uv(uv, depth);
+    float3 shadow_origin = add_bias(world_pos + normals * RAYGEN_NORMAL_OFFSET, normals);
+    float3 view_dir = normalize(pc.camera_pos.xyz - world_pos);
 
-    float3 final_hdr = shade_surface_simple_from_origin(albedo, N, shadow_origin);
+    float3 final_hdr = shade_surface_from_origin(albedo, normals, view_dir, roughness, metallic, shadow_origin);
     color_out[pixel] = float4(linear_to_srgb(tonemap_aces(final_hdr)), 1.0);
 }
 
