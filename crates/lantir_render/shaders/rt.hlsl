@@ -124,6 +124,7 @@ float3 shade_surface_from_origin(float3 albedo, float3 N, float3 view_dir, float
     float NdotV = saturate(dot(N, view_dir));
     float NdotL = saturate(dot(N, sun_dir));
     float VdotH = saturate(dot(view_dir, H));
+    float3 R = reflect(-view_dir, N); // Rreflection direction for the view ray
 
     // Fresnel reflectance at normal incidence (how much light is reflected vs refracted) 
     float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
@@ -151,8 +152,17 @@ float3 shade_surface_from_origin(float3 albedo, float3 N, float3 view_dir, float
     // Final outgoing radiance is the sum of diffuse and specular contributions, modulated by the incoming radiance, angle of incidence (NdotL), and shadow visibility.
     float3 direct = (diffuse + specular) * radiance * NdotL * shadow;
 
-    float3 ambient = albedo * 0.03; // Simple ambient term to ensure non-zero base lighting.
-    return ambient + direct;
+
+    float3 env_diffuse = sample_sky(N, DIFFUSE_IBL_LOD);
+    float3 diffuse_ibl = kD * albedo * env_diffuse; // Diffuse image-based lighting from the environment, modulated by the diffuse albedo and Fresnel term.
+
+    float3 env_specular = sample_sky(R, roughness * MAX_ENV_LOD);
+    float3 F_ibl = fresnel_schlick_roughness(NdotV, F0, roughness);
+    float3 specular_ibl = F_ibl * env_specular; // Specular image-based lighting from the environment, modulated by the Fresnel term.
+
+
+
+    return direct + diffuse_ibl + specular_ibl;
 }
 
 [shader("raygeneration")]
@@ -172,7 +182,7 @@ void raygen_main()
 
     if (depth <= 0.0)
     {
-        float3 sky_hdr = sample_sky(reconstruct_world_ray_dir(ndc));
+        float3 sky_hdr = sample_sky(reconstruct_world_ray_dir(ndc), 0);
         color_out[pixel] = float4(linear_to_srgb(tonemap_aces(sky_hdr)), 1.0);
         return;
     }
@@ -205,7 +215,7 @@ void primary_miss_main(inout ShadowPayload payload)
 void bounce_miss_main(inout BouncePayload payload)
 {
     payload.hit = false;
-    payload.sky_color = sample_sky(WorldRayDirection());
+    payload.sky_color = sample_sky(WorldRayDirection(), 0);
 }
 
 [shader("closesthit")]

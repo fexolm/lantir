@@ -1,7 +1,10 @@
-float3 sample_sky(float3 dir)
+static const float DIFFUSE_IBL_LOD = 6.0;
+static const float MAX_ENV_LOD = 8.0;
+
+float3 sample_sky(float3 dir, float lod)
 {
     dir = normalize(dir);
-
+    
     if (skybox.tex != INVALID && skybox.sampler != INVALID)
     {
         int texIdx  = clamp((int)skybox.tex, 0, 1023);
@@ -9,7 +12,7 @@ float3 sample_sky(float3 dir)
         return textures[texIdx].SampleLevel(
             samplers[sampIdx],
             dir_to_equirect_uv(dir),
-            0
+            lod
         ).rgb * skybox.exposure;
     }
 

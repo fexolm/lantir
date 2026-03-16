@@ -5,6 +5,12 @@ float3 fresnel_schlick(float cosTheta, float3 F0)
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
+float3 fresnel_schlick_roughness(float cosTheta, float3 F0, float roughness)
+{
+    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0)
+        * pow(1.0 - cosTheta, 5.0);
+}
+
 float distribution_ggx(float NdotH, float roughness)
 {
     float a  = roughness * roughness;
