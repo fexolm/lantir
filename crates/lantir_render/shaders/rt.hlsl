@@ -53,6 +53,7 @@ static const uint BOUNCE_HIT_GROUP_STRIDE = 1u;
 static const uint BOUNCE_MISS_INDEX       = 2u;
 
 static const float RAYGEN_NORMAL_OFFSET       = 0.001;
+static const bool  DEBUG_VIEW_ROUGHNESS       = false;
 
 #define FLOAT_SCALE (1.0 / 65536.0)
 #define INT_SCALE (256.0)
@@ -160,7 +161,7 @@ float3 shade_surface_from_origin(float3 albedo, float3 N, float3 view_dir, float
     float2 brdf = sample_brdf_lut(NdotV, roughness);
     float3 specular_ibl = env_specular * (F_ibl * brdf.x + brdf.y);
 
-    return direct + diffuse_ibl + specular_ibl;
+    return specular_ibl;
 }
 
 [shader("raygeneration")]
@@ -189,6 +190,13 @@ void raygen_main()
     float roughness  = gbuf_n.z;
     float metallic   = gbuf_n.w;
     float3 albedo  = gbuf_a.rgb;
+
+    if (DEBUG_VIEW_ROUGHNESS)
+    {
+        color_out[pixel] = float4(metallic.xxx, 1.0);
+        return;
+    }
+
     float3 world_pos = reconstruct_world_pos_from_uv(uv, depth);
     float3 shadow_origin = add_bias(world_pos + normals * RAYGEN_NORMAL_OFFSET, normals);
     float3 view_dir = normalize(pc.camera_pos.xyz - world_pos);
