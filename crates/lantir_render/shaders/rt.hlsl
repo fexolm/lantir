@@ -89,12 +89,9 @@ float3 get_sun_color()
 
 float trace_shadow_from_origin(float3 ray_origin, float3 sun_dir)
 {
-    uint2 pixel = DispatchRaysIndex().xy;
-    uint seed = pixel.x + pixel.y * pc.width + pc.frame_index * 987654;
-
     RayDesc ray;
     ray.Origin    = ray_origin;
-    ray.Direction = add_jitter(sun_dir, 0.01, seed);
+    ray.Direction = sun_dir;
     ray.TMin      = 0.001;
     ray.TMax      = 10000.0;
 
@@ -153,12 +150,15 @@ float3 shade_surface_from_origin(float3 albedo, float3 N, float3 view_dir, float
     float3 direct = (diffuse + specular) * radiance * NdotL * shadow;
 
 
-    float3 irradiance = evaluate_sh9(N, skybox.sh);
-    float3 diffuse_ibl = kD * albedo * irradiance; // Diffuse image-based lighting from the environment, modulated by the diffuse albedo and Fresnel term.
-
-    float3 env_specular = sample_sky(R, roughness * MAX_ENV_LOD);
     float3 F_ibl = fresnel_schlick_roughness(NdotV, F0, roughness);
-    float3 specular_ibl = F_ibl * env_specular; // Specular image-based lighting from the environment, modulated by the Fresnel term.
+    float3 kD_ibl = (1.0 - F_ibl) * (1.0 - metallic);
+
+    float3 irradiance = evaluate_sh9(N, skybox.sh);
+    float3 diffuse_ibl = kD_ibl * albedo * irradiance;
+
+    float3 env_specular = sample_prefiltered_env(R, roughness);
+    float2 brdf = sample_brdf_lut(NdotV, roughness);
+    float3 specular_ibl = env_specular * (F_ibl * brdf.x + brdf.y);
 
     return direct + diffuse_ibl + specular_ibl;
 }

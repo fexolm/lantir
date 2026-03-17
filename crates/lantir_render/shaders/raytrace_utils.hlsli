@@ -1,5 +1,4 @@
 static const float DIFFUSE_IBL_LOD = 6.0;
-static const float MAX_ENV_LOD = 8.0;
 
 float3 sample_sky(float3 dir, float lod)
 {
@@ -18,6 +17,146 @@ float3 sample_sky(float3 dir, float lod)
 
     float t = saturate(0.5 * (dir.y + 1.0));
     return lerp(float3(0.3, 0.3, 0.35), float3(0.15, 0.35, 0.8), t);
+}
+
+float2 dir_to_cube_face_uv(float3 dir, out uint face)
+{
+    float3 a = abs(dir);
+    float u;
+    float v;
+    float ma;
+
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        ma = a.x;
+        if (dir.x >= 0.0)
+        {
+            face = 0u; // px
+            u = -dir.z;
+            v = -dir.y;
+        }
+        else
+        {
+            face = 1u; // nx
+            u = dir.z;
+            v = -dir.y;
+        }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        ma = a.y;
+        if (dir.y >= 0.0)
+        {
+            face = 2u; // py
+            u = dir.x;
+            v = dir.z;
+        }
+        else
+        {
+            face = 3u; // ny
+            u = dir.x;
+            v = -dir.z;
+        }
+    }
+    else
+    {
+        ma = a.z;
+        if (dir.z >= 0.0)
+        {
+            face = 4u; // pz
+            u = dir.x;
+            v = -dir.y;
+        }
+        else
+        {
+            face = 5u; // nz
+            u = -dir.x;
+            v = -dir.y;
+        }
+    }
+
+    return 0.5 * (float2(u, v) / ma + 1.0);
+}
+
+uint prefiltered_mip_count(uint atlas_width, uint atlas_height)
+{
+    uint mip_count = 0u;
+    uint face_size = max(atlas_width / 6u, 1u);
+    uint consumed_height = 0u;
+
+    while (face_size > 0u && consumed_height + face_size <= atlas_height)
+    {
+        mip_count += 1u;
+        consumed_height += face_size;
+        face_size = max(face_size >> 1u, 0u);
+    }
+
+    return max(mip_count, 1u);
+}
+
+float3 sample_prefiltered_env_level(float3 dir, uint mip_level)
+{
+    if (skybox.prefiltered_tex == INVALID || skybox.prefiltered_sampler == INVALID)
+    {
+        return sample_sky(dir, 0.0);
+    }
+
+    int texIdx  = clamp((int)skybox.prefiltered_tex, 0, 1023);
+    int sampIdx = clamp((int)skybox.prefiltered_sampler, 0, 1023);
+
+    uint atlas_width, atlas_height;
+    textures[texIdx].GetDimensions(atlas_width, atlas_height);
+
+    uint face_size = max(atlas_width / 6u, 1u);
+    uint y_offset = 0u;
+    for (uint i = 0u; i < mip_level; ++i)
+    {
+        y_offset += face_size;
+        face_size = max(face_size >> 1u, 1u);
+    }
+
+    uint face = 0u;
+    float2 face_uv = dir_to_cube_face_uv(normalize(dir), face);
+    float2 atlas_px = float2(face * face_size, y_offset) + face_uv * (float(face_size) - 1.0);
+    float2 atlas_uv = (atlas_px + 0.5) / float2(atlas_width, atlas_height);
+
+    return textures[texIdx].SampleLevel(samplers[sampIdx], atlas_uv, 0.0).rgb * skybox.exposure;
+}
+
+float3 sample_prefiltered_env(float3 dir, float roughness)
+{
+    if (skybox.prefiltered_tex == INVALID || skybox.prefiltered_sampler == INVALID)
+    {
+        return sample_sky(dir, DIFFUSE_IBL_LOD);
+    }
+
+    int texIdx = clamp((int)skybox.prefiltered_tex, 0, 1023);
+    uint atlas_width, atlas_height;
+    textures[texIdx].GetDimensions(atlas_width, atlas_height);
+
+    uint mip_count = prefiltered_mip_count(atlas_width, atlas_height);
+    float mip = saturate(roughness) * float(max(mip_count - 1u, 0u));
+    uint mip0 = (uint)floor(mip);
+    uint mip1 = min(mip0 + 1u, mip_count - 1u);
+    float t = frac(mip);
+
+    float3 a = sample_prefiltered_env_level(dir, mip0);
+    float3 b = sample_prefiltered_env_level(dir, mip1);
+    return lerp(a, b, t);
+}
+
+float2 sample_brdf_lut(float ndotv, float roughness)
+{
+    if (skybox.brdf_lut_tex == INVALID || skybox.brdf_lut_sampler == INVALID)
+    {
+        return float2(1.0, 0.0);
+    }
+
+    int texIdx  = clamp((int)skybox.brdf_lut_tex, 0, 1023);
+    int sampIdx = clamp((int)skybox.brdf_lut_sampler, 0, 1023);
+    return textures[texIdx]
+        .SampleLevel(samplers[sampIdx], float2(saturate(ndotv), saturate(roughness)), 0.0)
+        .rg;
 }
 
 float3 reconstruct_world_ray_dir(float2 ndc_xy)
@@ -119,5 +258,5 @@ float3 evaluate_sh9(float3 n, float4 sh[9])
         sh[7].rgb * (1.092548 * x * z) +
         sh[8].rgb * (0.546274 * (x * x - y * y));
 
-    return max(result, 0.0);
+    return max(result, 0.0) * skybox.exposure;
 }

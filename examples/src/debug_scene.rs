@@ -10,7 +10,9 @@
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::*;
 use lantir_bevy::LantirDefaultPlugins;
-use lantir_render::resources::cmgen::load_cmgen_sh_file;
+use lantir_render::resources::cmgen::{
+    build_prefiltered_atlas, generate_brdf_lut_image, load_cmgen_skybox_files,
+};
 use lantir_render::{bevy::components::Camera, scene::CameraTransform, world_renderer::WorldRenderer};
 
 /// Marker resource: set after the scene is successfully loaded.
@@ -62,27 +64,20 @@ fn load_scene_system(
 
     let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
     let sky_path = assets_dir.join("sunset.exr");
-    let prefiltered_path = assets_dir.join("sunset/m0_px.exr");
-    let sh_path = assets_dir.join("sunset/sh.txt");
+    let cmgen_dir = assets_dir.join("sunset");
     let sky_image = image::open(&sky_path)
         .unwrap_or_else(|e| panic!("failed to load skybox image {}: {e}", sky_path.display()));
-    let sh = load_cmgen_sh_file(&sh_path)
-        .unwrap_or_else(|e| panic!("failed to load sky SH {}: {e}", sh_path.display()));
-    let prefiltered_image = image::open(&prefiltered_path).unwrap_or_else(|e| {
-        panic!(
-            "failed to load prefiltered sky image {}: {e}",
-            prefiltered_path.display()
-        )
-    });
-    // A dedicated BRDF LUT asset is not in the repo yet, so keep this placeholder local
-    // to the example instead of teaching ResourceManager about file parsing.
-    let brdf_lut_image = prefiltered_image.clone();
+    let cmgen = load_cmgen_skybox_files(&cmgen_dir)
+        .unwrap_or_else(|e| panic!("failed to load cmgen assets {}: {e}", cmgen_dir.display()));
+    let prefiltered_image = build_prefiltered_atlas(&cmgen.prefiltered_levels)
+        .expect("build prefiltered atlas");
+    let brdf_lut_image = generate_brdf_lut_image(128, 128);
 
     world_renderer
         .resource_manager()
         .set_skybox_image(
             sky_image,
-            sh,
+            cmgen.sh,
             prefiltered_image,
             brdf_lut_image,
             1.0,
