@@ -101,3 +101,23 @@ float3 add_jitter(float3 vec, float angular_radius, inout uint seed) {
     // 3. Отклоняем основной луч
     return normalize(vec + p_x * tangent + p_y * bitangent);
 }
+
+float3 evaluate_sh9(float3 n, float4 sh[9])
+{
+    float x = n.x;
+    float y = n.y;
+    float z = n.z;
+
+    float3 result =
+        sh[0].rgb * 0.282095 +
+        sh[1].rgb * (0.488603 * y) +
+        sh[2].rgb * (0.488603 * z) +
+        sh[3].rgb * (0.488603 * x) +
+        sh[4].rgb * (1.092548 * x * y) +
+        sh[5].rgb * (1.092548 * y * z) +
+        sh[6].rgb * (0.315392 * (3.0 * z * z - 1.0)) +
+        sh[7].rgb * (1.092548 * x * z) +
+        sh[8].rgb * (0.546274 * (x * x - y * y));
+
+    return max(result, 0.0);
+}

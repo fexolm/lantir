@@ -153,14 +153,12 @@ float3 shade_surface_from_origin(float3 albedo, float3 N, float3 view_dir, float
     float3 direct = (diffuse + specular) * radiance * NdotL * shadow;
 
 
-    float3 env_diffuse = sample_sky(N, DIFFUSE_IBL_LOD);
-    float3 diffuse_ibl = kD * albedo * env_diffuse; // Diffuse image-based lighting from the environment, modulated by the diffuse albedo and Fresnel term.
+    float3 irradiance = evaluate_sh9(N, skybox.sh);
+    float3 diffuse_ibl = kD * albedo * irradiance; // Diffuse image-based lighting from the environment, modulated by the diffuse albedo and Fresnel term.
 
     float3 env_specular = sample_sky(R, roughness * MAX_ENV_LOD);
     float3 F_ibl = fresnel_schlick_roughness(NdotV, F0, roughness);
     float3 specular_ibl = F_ibl * env_specular; // Specular image-based lighting from the environment, modulated by the Fresnel term.
-
-
 
     return direct + diffuse_ibl + specular_ibl;
 }

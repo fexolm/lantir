@@ -51,9 +51,6 @@ struct Skybox
     uint tex;
     uint sampler;
 
-    uint irradiance_tex;
-    uint irradiance_sampler;
-
     uint prefiltered_tex;
     uint prefiltered_sampler;
 
@@ -62,6 +59,7 @@ struct Skybox
 
     float exposure;
     float ambient_floor;
+    float4 sh[9];
 };
 
 // ---------------------------------------------------------------------------

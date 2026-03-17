@@ -366,7 +366,7 @@ impl ResourceManager {
     pub fn set_skybox_image(
         &self,
         image: image::DynamicImage,
-        irradiance: image::DynamicImage,
+        sh: [glam::Vec4; 9],
         prefiltered: image::DynamicImage,
         brdf_lut: image::DynamicImage,
         exposure: f32,
@@ -375,14 +375,13 @@ impl ResourceManager {
         self.write_skybox(&Skybox {
             tex: self.add_hdr_texture(image)? as u32,
             sampler: DEFAULT_SAMPLER_HANDLE as u32,
-            irradiance_tex: self.add_hdr_texture(irradiance)? as u32,
-            irradiance_sampler: DEFAULT_SAMPLER_HANDLE as u32,
             prefiltered_tex: self.add_hdr_texture(prefiltered)? as u32,
             prefiltered_sampler: DEFAULT_SAMPLER_HANDLE as u32,
             brdf_lut_tex: self.add_hdr_texture(brdf_lut)? as u32,
             brdf_lut_sampler: DEFAULT_SAMPLER_HANDLE as u32,
             exposure,
             ambient_floor,
+            sh,
         })
     }
 

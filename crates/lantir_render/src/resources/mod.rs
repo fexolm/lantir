@@ -1,5 +1,6 @@
 use lantir_hal::acceleration_structure::AccelerationStructure;
 
+pub mod cmgen;
 pub mod resource_manager;
 
 pub type TextureHandle = u64;
@@ -34,14 +35,13 @@ pub const META_BUFFER_BINDING_TLAS: u32 = 7;
 pub struct Skybox {
     pub tex: u32,
     pub sampler: u32,
-    pub irradiance_tex: u32,
-    pub irradiance_sampler: u32,
     pub prefiltered_tex: u32,
     pub prefiltered_sampler: u32,
     pub brdf_lut_tex: u32,
     pub brdf_lut_sampler: u32,
     pub exposure: f32,
     pub ambient_floor: f32,
+    pub sh: [glam::Vec4; 9],
 }
 
 #[repr(C)]

@@ -10,6 +10,7 @@
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::*;
 use lantir_bevy::LantirDefaultPlugins;
+use lantir_render::resources::cmgen::load_cmgen_sh_file;
 use lantir_render::{bevy::components::Camera, scene::CameraTransform, world_renderer::WorldRenderer};
 
 /// Marker resource: set after the scene is successfully loaded.
@@ -59,11 +60,31 @@ fn load_scene_system(
         .expect("load sponza.glb")
         .spawn(&mut commands);
 
+    let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let sky_path = assets_dir.join("sunset.exr");
+    let prefiltered_path = assets_dir.join("sunset/m0_px.exr");
+    let sh_path = assets_dir.join("sunset/sh.txt");
+    let sky_image = image::open(&sky_path)
+        .unwrap_or_else(|e| panic!("failed to load skybox image {}: {e}", sky_path.display()));
+    let sh = load_cmgen_sh_file(&sh_path)
+        .unwrap_or_else(|e| panic!("failed to load sky SH {}: {e}", sh_path.display()));
+    let prefiltered_image = image::open(&prefiltered_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to load prefiltered sky image {}: {e}",
+            prefiltered_path.display()
+        )
+    });
+    // A dedicated BRDF LUT asset is not in the repo yet, so keep this placeholder local
+    // to the example instead of teaching ResourceManager about file parsing.
+    let brdf_lut_image = prefiltered_image.clone();
+
     world_renderer
         .resource_manager()
         .set_skybox_image(
-            image::load_from_memory(include_bytes!("../assets/sunset.exr"))
-                .expect("load skybox"),
+            sky_image,
+            sh,
+            prefiltered_image,
+            brdf_lut_image,
             1.0,
             0.35,
         )
